@@ -705,7 +705,43 @@ def _fetch_realtime_a(code: str) -> dict:
 
 
 def _fetch_realtime_hk(code: str) -> dict:
-    """Fetch HK realtime quote."""
+    """Fetch HK realtime quote.
+
+    降级链与 fetch_hk 的历史行情保持一致：efinance → akshare → yfinance。
+    efinance.get_latest_quote 按单只代码取快照（含名称/涨跌幅/最高最低/PE/市值），
+    比 akshare 的港股全市场快照(stock_hk_spot_em，一次拉全部代码且易被限流)更稳，
+    故排在第一位。各源失败均写日志（不再静默 pass 后返回空 dict）。
+    """
+    # Priority 1: efinance (single-code snapshot, rich fields)
+    if _check_source("efinance"):
+        try:
+            import efinance as ef
+            qt = ef.stock.get_latest_quote(code)
+            if qt is not None and not qt.empty:
+                r = qt.iloc[0]
+                rt = {
+                    "name": str(r.get("名称", f"HK{code}")),
+                    "price": _safe_float(r.get("最新价")),
+                    "change_pct": _safe_float(r.get("涨跌幅")),
+                    "change_amount": _safe_float(r.get("涨跌额")),
+                    "volume": _safe_float(r.get("成交量")),
+                    "amount": _safe_float(r.get("成交额")),
+                    "turnover_rate": _safe_float(r.get("换手率")),
+                    "volume_ratio": _safe_float(r.get("量比")),
+                    "pe_ratio": _safe_float(r.get("动态市盈率")),
+                    "total_mv": _safe_float(r.get("总市值")),
+                    "circ_mv": _safe_float(r.get("流通市值")),
+                    "high": _safe_float(r.get("最高")),
+                    "low": _safe_float(r.get("最低")),
+                    "open": _safe_float(r.get("今开")),
+                    "pre_close": _safe_float(r.get("昨日收盘")),
+                }
+                if rt["price"]:
+                    return rt
+        except Exception as e:
+            _log(f"[HK{code}] efinance 实时快照失败: {e}")
+
+    # Priority 2: akshare 东方财富港股全市场快照
     if _check_source("akshare"):
         try:
             import akshare as ak
@@ -722,8 +758,32 @@ def _fetch_realtime_hk(code: str) -> dict:
                     "pb_ratio": _safe_float(r.get("市净率")),
                     "total_mv": _safe_float(r.get("总市值")),
                 }
-        except Exception:
-            pass
+        except Exception as e:
+            _log(f"[HK{code}] akshare 实时快照失败: {e}")
+
+    # Priority 3: yfinance (works when EastMoney endpoints are blocked)
+    if _check_source("yfinance"):
+        try:
+            import yfinance as yf
+            info = yf.Ticker(to_yfinance_code(code, "cn_hk")).info
+            if info:
+                return {
+                    "name": info.get("shortName") or info.get("longName") or f"HK{code}",
+                    "price": _safe_float(info.get("currentPrice") or info.get("regularMarketPrice")),
+                    "change_pct": _safe_float(info.get("regularMarketChangePercent")),
+                    "volume": _safe_float(info.get("regularMarketVolume")),
+                    "pe_ratio": _safe_float(info.get("trailingPE")),
+                    "pb_ratio": _safe_float(info.get("priceToBook")),
+                    "total_mv": _safe_float(info.get("marketCap")),
+                    "high": _safe_float(info.get("dayHigh")),
+                    "low": _safe_float(info.get("dayLow")),
+                    "open": _safe_float(info.get("regularMarketOpen")),
+                    "pre_close": _safe_float(info.get("regularMarketPreviousClose")),
+                    "week_52_high": _safe_float(info.get("fiftyTwoWeekHigh")),
+                    "week_52_low": _safe_float(info.get("fiftyTwoWeekLow")),
+                }
+        except Exception as e:
+            _log(f"[HK{code}] yfinance 实时快照失败: {e}")
     return {}
 
 
@@ -841,7 +901,18 @@ def fetch_hk(code: str, days: int) -> dict:
         raise ValueError(f"All data sources failed for HK{code}: {'; '.join(errors)}")
 
     realtime = _fetch_realtime_hk(code)
-    name = realtime.get("name", f"HK{code}")
+    if not realtime.get("price") and ohlcv:
+        # 所有实时源均失败 → 用最后一根日K兜底，保证看板仍有现价/涨跌幅（同 fetch_us）
+        last = ohlcv[-1]
+        realtime = {
+            **realtime,
+            "name": realtime.get("name") or f"HK{code}",
+            "price": last["close"],
+            "change_pct": last.get("pct_chg"),
+            "realtime_source": "last_daily_bar",
+        }
+        errors.append("realtime: all quote sources failed, using last daily bar")
+    name = realtime.get("name") or f"HK{code}"
     return {"ohlcv": ohlcv, "realtime": realtime, "name": name, "source": source, "errors": errors}
 
 
