@@ -10,7 +10,8 @@ Data source priority (graceful degradation):
   US:      yfinance (primary)
 
 News search priority (via --news flag):
-  Tavily (if TAVILY_API_KEY set) > SerpAPI (if SERPAPI_KEY set) > skip (use WebSearch in Claude)
+  A股:   akshare 东方财富个股新闻 (free, no key) > Tavily > SerpAPI > skip (use WebSearch in Claude)
+  HK/US: Tavily (if TAVILY_API_KEY set) > SerpAPI (if SERPAPI_KEY set) > skip (use WebSearch in Claude)
 
 Usage:
     python3 stock_data_fetcher.py --stocks "600519,TSLA,HK00700" [--days 120] [--news]
@@ -859,12 +860,51 @@ def fetch_us(code: str, days: int) -> dict:
 # SECTION 2.5: News Search (optional, with graceful degradation)
 # ============================================================
 
-def search_news(stock_name: str, code: str, max_results: int = 5) -> list:
+def _fetch_news_akshare(code: str, max_results: int = 5) -> list:
+    """A股个股新闻 via akshare 东方财富(stock_news_em)。免费、无需 API Key。
+
+    返回 list of {"title", "content", "url", "date", "source", "publisher"}，
+    按发布时间倒序。仅支持 A 股六位代码。
     """
-    Search news with priority: Tavily > SerpAPI > empty (let Claude WebSearch).
-    Returns list of {"title": ..., "content": ..., "url": ..., "date": ...}
+    import akshare as ak
+    df = ak.stock_news_em(symbol=code)
+    if df is None or df.empty:
+        return []
+    rows = []
+    for _, r in df.iterrows():
+        try:
+            rows.append({
+                "title": str(r.get("新闻标题", "")).strip(),
+                "content": str(r.get("新闻内容", "")).strip().replace("\n", " ")[:200],
+                "url": str(r.get("新闻链接", "")).strip(),
+                "date": str(r.get("发布时间", "")).strip(),
+                "source": "akshare-em",
+                "publisher": str(r.get("文章来源", "")).strip() or "东方财富",
+            })
+        except Exception:
+            continue
+    rows.sort(key=lambda x: x["date"], reverse=True)
+    return rows[:max_results]
+
+
+def search_news(stock_name: str, code: str, max_results: int = 5, market: str = "cn_a") -> list:
     """
-    # Priority 0: Tavily
+    Search news with priority:
+      A股: akshare 东方财富个股新闻 (free, no key) > Tavily > SerpAPI > empty
+      HK/US: Tavily > SerpAPI > empty
+    Returns list of {"title": ..., "content": ..., "url": ..., "date": ..., "source": ...}
+    """
+    # Priority 0: akshare 东方财富个股新闻 (A股专属, 免费无 Key)
+    if market == "cn_a" and _check_source("akshare"):
+        try:
+            results = _fetch_news_akshare(code, max_results)
+            if results:
+                _log(f"[{code}] News via akshare/东方财富 ({len(results)} results)")
+                return results
+        except Exception as e:
+            _log(f"[{code}] akshare news failed: {e}")
+
+    # Priority 1: Tavily
     tavily_key = os.environ.get("TAVILY_API_KEY")
     if tavily_key:
         try:
@@ -892,9 +932,12 @@ def search_news(stock_name: str, code: str, max_results: int = 5) -> list:
         try:
             from serpapi import GoogleSearch
             params = {
-                "q": f"{stock_name} stock news",
+                "engine": "google_news",
+                "q": f"{stock_name} {code} stock news OR earnings OR announcement",
                 "api_key": serpapi_key,
                 "num": max_results,
+                "hl": "zh-CN",
+                "gl": "CN",
             }
             search = GoogleSearch(params)
             data = search.get_dict()
@@ -902,18 +945,18 @@ def search_news(stock_name: str, code: str, max_results: int = 5) -> list:
             for r in data.get("organic_results", [])[:max_results]:
                 results.append({
                     "title": r.get("title", ""),
-                    "content": r.get("snippet", "")[:200],
+                    "content": r.get("snippet", "") or r.get("body", "")[:200],
                     "url": r.get("link", ""),
                     "source": "serpapi",
                 })
             if results:
-                _log(f"[{code}] News via SerpAPI ({len(results)} results)")
+                _log(f"[{code}] News via Google News via SerpAPI ({len(results)} results)")
                 return results
         except Exception as e:
             _log(f"[{code}] SerpAPI failed: {e}")
 
-    # No API keys configured — return empty, let Claude use WebSearch
-    _log(f"[{code}] No news API configured, skipping (Claude will use WebSearch)")
+    # No news source available — return empty, let Claude use WebSearch
+    _log(f"[{code}] No news source available, skipping (Claude will use WebSearch)")
     return []
 
 
@@ -1331,7 +1374,7 @@ def analyze_stock(code: str, days: int = 120, fetch_news: bool = False) -> dict:
     news = []
     if fetch_news:
         stock_name = raw.get("name", display)
-        news = search_news(stock_name, display)
+        news = search_news(stock_name, display, market=market)
 
     result = {
         "code": display,
@@ -1362,7 +1405,7 @@ def main():
     parser = argparse.ArgumentParser(description="Stock Data Fetcher")
     parser.add_argument("--stocks", required=True, help="Comma-separated stock codes")
     parser.add_argument("--days", type=int, default=120, help="History trading days")
-    parser.add_argument("--news", action="store_true", help="Also search news (requires TAVILY_API_KEY or SERPAPI_KEY)")
+    parser.add_argument("--news", action="store_true", help="Also search news (A股 via akshare/东方财富 free; HK/US needs TAVILY_API_KEY or SERPAPI_KEY)")
     args = parser.parse_args()
 
     codes = [c.strip() for c in args.stocks.split(",") if c.strip()]
@@ -1377,6 +1420,12 @@ def main():
     sources_status["ths_api"] = "configured" if _ths_api_key() else "not set"
     sources_status["tavily_api"] = "configured" if os.environ.get("TAVILY_API_KEY") else "not set"
     sources_status["serpapi"] = "configured" if os.environ.get("SERPAPI_KEY") else "not set"
+    sources_status["news"] = (
+        "akshare-em (A股个股新闻, free)"
+        if _check_source("akshare")
+        else ("tavily" if os.environ.get("TAVILY_API_KEY")
+              else ("serpapi" if os.environ.get("SERPAPI_KEY") else "none"))
+    )
     _log(f"Data sources: {json.dumps(sources_status)}")
 
     for code in codes:

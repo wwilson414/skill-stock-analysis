@@ -74,8 +74,8 @@ metadata:
 |----------|------|----------|----------|
 | `TUSHARE_TOKEN` | A股专业数据（优先级最高） | [tushare.pro](https://tushare.pro) 注册 | 基础接口免费 |
 | `HITHINK_FINANCE_API_KEY` | 同花顺官方数据API（A股前复权行情+估值+财务+标的检索，优先级仅次于Tushare）。官方推荐变量名，REST/MCP/CLI/Python 共用；`FUYAO_API_KEY`、`THS_API_KEY` 仍作兼容别名 | [fuyao.aicubes.cn](https://fuyao.aicubes.cn) 登录签发 | 需同花顺账号 |
-| `TAVILY_API_KEY` | 新闻搜索（优先级最高） | [tavily.com](https://tavily.com) 注册 | 1000次/月 |
-| `SERPAPI_KEY` | 新闻搜索（备选） | [serpapi.com](https://serpapi.com) 注册 | 100次/月 |
+| `TAVILY_API_KEY` | 港股/美股新闻搜索（A股新闻已内置 akshare 免费源） | [tavily.com](https://tavily.com) 注册 | 1000次/月 |
+| `SERPAPI_KEY` | 港股/美股新闻搜索（备选） | [serpapi.com](https://serpapi.com) 注册 | 100次/月 |
 
 **行情数据降级链**：
 - A股: Tushare Pro → 同花顺官方API(有Key) → efinance → 同花顺 → akshare → yfinance
@@ -131,14 +131,19 @@ pip3 install akshare yfinance efinance --quiet && python3 /tmp/stock_data_fetche
 
 ## STEP 3: 新闻搜索
 
-如果 STEP 2 的 JSON 中已有 `news` 字段（用户配置了 Tavily/SerpAPI），直接使用脚本返回的新闻。
+A股股票：
+- 先查 `stock_data_fetcher.py --stocks "600519" --news`（使用 `--news` 参数）
+- 脚本降级链：akshare 东方财富（免费） → Tavily → SerpAPI(Google News) → Claude WebSearch
+  - SerpAPI 使用 **Google News** 搜索引擎，查询 `"{股票名称} {股票代码} stock news OR earnings OR announcement"`，返回 Google News 结果
+- 若 JSON 中已有 `news` 数组，直接使用它
+- 如果脚本返回空（无可用新闻/网络故障），执行 WebSearch：
+  - 搜索 `"{股票名称} {股票代码} 最新消息"`（如："华能国际 600011 最新消息"）
+  - 限制：每只股票最多 2 次搜索
+- 将新闻总结为 2-3 条要点/股。如果没有搜到相关新闻，注明"近期无重大消息"
 
-如果没有（大多数情况），对每只股票执行 WebSearch：
-- 搜索 `"{股票名称} 最新消息 {今天日期}"`
-- 搜索 `"{股票名称} stock news"`
-- 限制：每只股票最多 2-3 次搜索，总共不超过 10 次
-
-将新闻总结为 2-3 条要点/股。如果没有搜到相关新闻，注明"近期无重大消息"。
+港股/美股：
+- 脚本通过 Tavily/SerpAPI(Google News) 获取新闻，需配置 `TAVILY_API_KEY`/`SERPAPI_KEY`
+- 如未配置，执行 WebSearch：`"{股票名称} stock news"`
 
 ## STEP 4: 综合分析
 

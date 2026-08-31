@@ -174,8 +174,8 @@ TSLA 当前处于明显的空头格局，MA 三线空头排列，MACD 死叉...
 | -------- | ---- | -------- | -------- |
 | `TUSHARE_TOKEN` | A股专业数据（优先级最高） | [tushare.pro](https://tushare.pro) 注册 | 基础接口免费 |
 | `HITHINK_FINANCE_API_KEY` | 同花顺官方数据API（A股前复权行情+估值+标的检索，优先级仅次于 Tushare）。官方推荐变量名，REST/MCP/CLI/Python 共用；`FUYAO_API_KEY`、`THS_API_KEY` 仍作兼容别名 | [fuyao.aicubes.cn](https://fuyao.aicubes.cn) 登录签发 | 需同花顺账号 |
-| `TAVILY_API_KEY` | 新闻搜索（优先级最高） | [tavily.com](https://tavily.com) 注册 | 1000次/月 |
-| `SERPAPI_KEY` | 新闻搜索（备选） | [serpapi.com](https://serpapi.com) 注册 | 100次/月 |
+| `TAVILY_API_KEY` | 港股/美股新闻搜索（A股新闻已内置 akshare 免费源） | [tavily.com](https://tavily.com) 注册 | 1000次/月 |
+| `SERPAPI_KEY` | 港股/美股新闻搜索 — Google News（备选） | [serpapi.com](https://serpapi.com) 注册 | 100次/月 |
 
 ### 行情数据降级链
 
@@ -188,7 +188,8 @@ A股:  Tushare Pro → 同花顺官方API(有Key) → efinance → 同花顺 →
 ### 新闻降级链
 
 ```
-Tavily → SerpAPI → Claude WebSearch（兜底，无需配置）
+A股:  akshare 东方财富个股新闻（免费无Key）→ Tavily → SerpAPI(Google News) → Claude WebSearch
+港美: Tavily → SerpAPI(Google News) → Claude WebSearch
 ```
 
 ## 数据来源
