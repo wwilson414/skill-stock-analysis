@@ -118,5 +118,5 @@ For each stock, output one card separated by `---`:
 
 ```
 > 免责声明: 以上分析仅供参考，不构成投资建议。投资有风险，入市需谨慎。
-> 数据来源: akshare / yfinance | 分析时间: {timestamp}
+> 数据来源: 同花顺 / efinance / akshare / yfinance | 分析时间: {timestamp}
 ```

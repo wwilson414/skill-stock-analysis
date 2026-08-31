@@ -5,7 +5,7 @@ Outputs structured JSON for Claude Code analysis.
 No AI/LLM calls -- pure data + math.
 
 Data source priority (graceful degradation):
-  A-share: Tushare Pro (if TUSHARE_TOKEN set) > efinance > akshare > yfinance
+  A-share: Tushare Pro (if TUSHARE_TOKEN set) > 同花顺官方API(if HITHINK_FINANCE_API_KEY set) > efinance > 同花顺(THS) > akshare > yfinance
   HK:      efinance > akshare > yfinance
   US:      yfinance (primary)
 
@@ -17,6 +17,7 @@ Usage:
 
 Environment variables (optional, for enhanced data):
     TUSHARE_TOKEN    - Tushare Pro token (free signup at tushare.pro)
+    HITHINK_FINANCE_API_KEY - 同花顺官方金融数据API key (fuyao.aicubes.cn 用同花顺账号签发; 提供A股前复权行情/估值/财务/标的检索; 官方推荐变量名, REST/MCP/CLI/Python 共用; 兼容别名 FUYAO_API_KEY / THS_API_KEY)
     TAVILY_API_KEY   - Tavily API key (1000 free calls/month)
     SERPAPI_KEY       - SerpAPI key (100 free calls/month)
 """
@@ -41,6 +42,10 @@ def _check_source(name):
     too instead of failing later at fetch time.
     """
     if name not in _AVAILABLE_SOURCES:
+        if name == "ths":
+            # 同花顺 uses only stdlib (urllib/json/re) — no pip package needed
+            _AVAILABLE_SOURCES[name] = True
+            return True
         try:
             mod = __import__(name)
             if name == "efinance":
@@ -80,7 +85,9 @@ def classify_stock(code: str) -> tuple:
         return ("cn_a", upper, upper)
 
     # 美股: TSLA -> ('us', 'TSLA', 'TSLA')
-    if upper.isalpha() and 1 <= len(upper) <= 5:
+    # 仅接受 ASCII 字母；中文名(如"贵州茅台") isalpha 也为 True，须排除，
+    # 交由同花顺官方标的检索(需 HITHINK_FINANCE_API_KEY)解析，无 Key 时明确拒绝。
+    if upper.isalpha() and upper.isascii() and 1 <= len(upper) <= 5:
         return ("us", upper, upper)
 
     # 带后缀的A股: 600519.SH -> strip
@@ -197,7 +204,335 @@ def _fetch_efinance_hk(code: str, days: int):
     return _df_to_ohlcv(df, days), "efinance"
 
 
-# --- akshare (Priority 2, free) ---
+# --- 同花顺/10jqka (Priority 2, free, zero-dependency via stdlib) ---
+#
+# Public JSONP endpoints of d.10jqka.com.cn (同花顺行情). The hs_ prefix only
+# covers A-shares; HK/US return 502 from this endpoint family, so 同花顺 is
+# wired into the A-share chain only.
+
+def _ths_http_get(url: str, timeout: int = 12, retries: int = 1) -> str:
+    """GET a 同花顺 JSONP endpoint with browser-like headers.
+
+    retries: number of extra attempts on failure. K-line paths pass
+    retries=0 (fail fast — the graceful degradation chain catches errors);
+    the low-volume realtime path may retry once.
+    """
+    import urllib.request
+    last_err = None
+    for _attempt in range(retries + 1):
+        try:
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                              "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 "
+                              "Safari/537.36",
+                "Referer": "http://q.10jqka.com.cn/",
+                "Accept": "*/*",
+            })
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read().decode("utf-8", errors="replace")
+        except Exception as e:
+            last_err = e
+    raise last_err
+
+
+def _ths_parse_jsonp(body: str) -> dict:
+    """Strip the JSONP wrapper `func({...})` and return the inner dict."""
+    import json
+    import re
+    m = re.match(r"^[^(]+\((.*)\)\s*;?\s*$", body, re.S)
+    if not m:
+        raise ValueError("同花顺 returned unexpected (non-JSONP) response")
+    return json.loads(m.group(1))
+
+
+def _ths_parse_kline_rows(data_str: str) -> list:
+    """Parse a 同花顺 kline payload into normalized OHLCV bars.
+
+    Row format (CSV, semicolon separated):
+      YYYYMMDD,open,high,low,close,volume,amount,pct_chg,...
+    volume unit = 手 (1手 = 100 shares), amount unit = 元.
+    """
+    bars = []
+    for row in (data_str or "").split(";"):
+        f = row.split(",")
+        if len(f) < 7:
+            continue
+        try:
+            date = f[0].strip()
+            if len(date) != 8 or not date.isdigit():
+                continue
+            open_ = float(f[1]); high = float(f[2])
+            low = float(f[3]); close = float(f[4])
+            if min(open_, high, low, close) <= 0:
+                continue
+            bars.append({
+                "date": f"{date[:4]}-{date[4:6]}-{date[6:]}",
+                "open": _safe_float(open_),
+                "high": _safe_float(high),
+                "low": _safe_float(low),
+                "close": _safe_float(close),
+                "volume": _safe_float(f[5]),
+                "amount": _safe_float(f[6]),
+                "pct_chg": None,
+            })
+        except (ValueError, IndexError):
+            continue
+    return bars
+
+
+def _fetch_ths_a(code: str, days: int) -> tuple:
+    """Fetch A-share daily K-line from 同花顺 (10jqka).
+
+    - last.js returns the ~140 most recent trading days in one request.
+    - For longer ranges we merge year files (YYYY.js) backwards from the
+      current year, each returning that whole year's daily bars. Year files
+      occasionally 502; we skip-and-warn instead of failing hard.
+    Returns (ohlcv, source). No API key and no third-party dependency.
+    """
+    base = f"http://d.10jqka.com.cn/v6/line/hs_{code}/01/"
+    bars = []
+    try:
+        body = _ths_http_get(f"{base}last.js", retries=0)
+        bars = _ths_parse_kline_rows(_ths_parse_jsonp(body).get("data", ""))
+    except Exception as e:
+        _log(f"[{code}] 同花顺 last.js failed: {e}")
+
+    if len(bars) < days:
+        year = datetime.now().year
+        have_dates = {b["date"] for b in bars}
+        fetched = 0
+        while len(bars) < days and fetched < 6:  # cap ~6 years (~1500 bars)
+            body = None
+            try:
+                body = _ths_http_get(f"{base}{year}.js", retries=0)
+                ybars = _ths_parse_kline_rows(_ths_parse_jsonp(body).get("data", ""))
+            except Exception as e:
+                _log(f"[{code}] 同花顺 {year}.js unavailable: {e}")
+            if body is not None:
+                for b in ybars:
+                    if b["date"] not in have_dates:
+                        bars.append(b)
+                        have_dates.add(b["date"])
+            fetched += 1
+            year -= 1
+
+    if not bars:
+        raise ValueError(f"同花顺 returned no data for {code}")
+
+    bars.sort(key=lambda b: b["date"])
+    for i in range(1, len(bars)):
+        prev, curr = bars[i - 1]["close"], bars[i]["close"]
+        if prev and curr and prev > 0:
+            bars[i]["pct_chg"] = round((curr - prev) / prev * 100, 2)
+
+    _log(f"[{code}] Using 同花顺 (free, stdlib-only, {len(bars)} bars)")
+    return bars[-days:], "ths"
+
+
+def _fetch_realtime_ths(code: str) -> dict:
+    """Fetch A-share realtime snapshot from 同花顺 today.js + last.js.
+
+    today.js field IDs are undocumented, so we read price/volume/amount with
+    best-effort guards and recompute change_pct against the last completed
+    daily close from last.js — the math stays self-consistent even if some
+    vendor field lands on a surprising value. When today.js is unavailable
+    (after hours, endpoint flakiness, ...) we fall back to the latest daily
+    bar from last.js so the caller still gets a usable snapshot.
+    """
+    base = f"http://d.10jqka.com.cn/v6/line/hs_{code}/01/"
+    rt = {}
+    price = None
+    date_today = ""
+    try:
+        node = _ths_parse_jsonp(_ths_http_get(f"{base}today.js", timeout=10))
+        node = node.get(f"hs_{code}") or node
+        price = _safe_float(node.get("11"))
+        if price:
+            date_today = str(node.get("1") or "").replace("-", "")
+            rt = {
+                "name": node.get("name", code),
+                "price": price,
+                "high": _safe_float(node.get("8")),
+                "low": _safe_float(node.get("9")),
+                "volume": _safe_float(node.get("13")),
+                "amount": _safe_float(node.get("19")),
+            }
+    except Exception as e:
+        _log(f"[{code}] 同花顺 today.js failed: {e}")
+
+    try:
+        last = _ths_parse_jsonp(_ths_http_get(f"{base}last.js", timeout=10, retries=0))
+        bars = _ths_parse_kline_rows(last.get("data", ""))
+        if not bars:
+            raise ValueError("empty kline rows")
+        prev_close = None
+        for b in reversed(bars):
+            if not date_today or b["date"].replace("-", "") < date_today:
+                prev_close = b["close"]
+                break
+        if not rt:
+            # today.js unavailable / no live price — use latest daily bar
+            rt = {
+                "name": last.get("name") or code,
+                "price": bars[-1]["close"],
+                "high": bars[-1]["high"],
+                "low": bars[-1]["low"],
+                "volume": bars[-1]["volume"],
+                "amount": bars[-1]["amount"],
+            }
+            price = bars[-1]["close"]
+            prev_close = bars[-2]["close"] if len(bars) > 1 else None
+        if prev_close is None and len(bars) > 1:
+            prev_close = bars[-2]["close"]
+        if prev_close and prev_close > 0 and price:
+            rt["change_pct"] = round((price - prev_close) / prev_close * 100, 2)
+    except Exception as e:
+        _log(f"[{code}] 同花顺 last.js (realtime) failed: {e}")
+    return rt
+
+
+# --- 同花顺官方 API (fuyao.aicubes.cn, 需 HITHINK_FINANCE_API_KEY, 兼容 FUYAO_API_KEY / THS_API_KEY) ---
+#
+# 官方结构化金融数据 REST API：snake_case 字段、自带涨跌幅、支持前/后复权，
+# 并有估值(PE/PB/PS/PCF)、财务指标、标的检索等增强数据。仅覆盖 A 股。
+# 未配置 API Key 时所有函数直接跳过，不影响零配置降级链。
+
+def _ths_api_key() -> str:
+    """同花顺官方 API Key。
+
+    官方推荐变量名 HITHINK_FINANCE_API_KEY（REST/MCP/CLI/Python 四端共用）；
+    FUYAO_API_KEY / THS_API_KEY 作为兼容别名保留。
+    """
+    return (
+        os.environ.get("HITHINK_FINANCE_API_KEY")
+        or os.environ.get("FUYAO_API_KEY")
+        or os.environ.get("THS_API_KEY")
+        or ""
+    )
+
+
+def _fuyao_get(path: str, params: dict = None) -> dict:
+    """GET 同花顺官方 API，携带 X-api-key 鉴权，返回 ApiResponse 信封。"""
+    import json as _json
+    import urllib.parse
+    import urllib.request
+    key = _ths_api_key()
+    if not key:
+        raise EnvironmentError("HITHINK_FINANCE_API_KEY not set (aliases FUYAO_API_KEY / THS_API_KEY also checked)")
+    url = "https://fuyao.aicubes.cn" + path
+    if params:
+        url += "?" + urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
+    req = urllib.request.Request(url, headers={
+        "X-api-key": key,
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json",
+    })
+    with urllib.request.urlopen(req, timeout=12) as resp:
+        return _json.loads(resp.read().decode("utf-8", errors="replace"))
+
+
+def _fuyao_thscode(code: str) -> str:
+    """A股纯代码 -> 完整 thscode（600519 -> 600519.SH，920xxx -> 920xxx.BJ）。"""
+    if code.startswith(("600", "601", "603", "605", "688", "689", "51", "52", "56", "58")):
+        return f"{code}.SH"
+    if code.startswith(("43", "83", "87", "88", "92")):
+        return f"{code}.BJ"
+    return f"{code}.SZ"
+
+
+def _fetch_fuyao_a(code: str, days: int) -> tuple:
+    """A股历史 K 线 via 同花顺官方 API（前复权，字段自带官方语义）。
+
+    返回 (ohlcv, source)。窗口跨度由脚本按 days 推算，官方上限 10 年。
+    """
+    end_ms = int(datetime.now().timestamp() * 1000)
+    start_ms = int((datetime.now() - timedelta(days=days * 2)).timestamp() * 1000)
+    resp = _fuyao_get("/api/a-share/prices/historical", {
+        "thscode": _fuyao_thscode(code),
+        "interval": "1d",
+        "start": start_ms,
+        "end": end_ms,
+        "adjust": "forward",
+    })
+    if resp.get("code") != 0:
+        raise ValueError(f"同花顺官方API: {resp.get('message')}")
+    items = (resp.get("data") or {}).get("item") or []
+    bars = []
+    for it in items:
+        try:
+            d = datetime.fromtimestamp(int(it["date_ms"]) / 1000)
+        except (KeyError, TypeError, ValueError):
+            continue
+        bars.append({
+            "date": d.strftime("%Y-%m-%d"),
+            "open": _safe_float(it.get("open_price")),
+            "high": _safe_float(it.get("high_price")),
+            "low": _safe_float(it.get("low_price")),
+            "close": _safe_float(it.get("close_price")),
+            "volume": _safe_float(it.get("volume")),
+            "amount": _safe_float(it.get("turnover")),
+            "pct_chg": None,
+        })
+    if not bars:
+        raise ValueError(f"同花顺官方API returned no data for {code}")
+    bars.sort(key=lambda b: b["date"])
+    for i in range(1, len(bars)):
+        prev, curr = bars[i - 1]["close"], bars[i]["close"]
+        if prev and curr and prev > 0:
+            bars[i]["pct_chg"] = round((curr - prev) / prev * 100, 2)
+    _log(f"[{code}] Using 同花顺官方API (前复权, {len(bars)} bars)")
+    return bars[-days:], "ths_api"
+
+
+def _fetch_realtime_fuyao(code: str) -> dict:
+    """A股实时行情 + 估值 via 同花顺官方 API（快照自带官方涨跌幅）。
+
+    行情快照不含中文名与估值，故再调一次估值快照补充 name / PE / PB / PS / PCF。
+    """
+    resp = _fuyao_get("/api/a-share/prices/snapshot", {"thscodes": _fuyao_thscode(code)})
+    if resp.get("code") != 0:
+        raise ValueError(f"同花顺官方API snapshot: {resp.get('message')}")
+    items = (resp.get("data") or {}).get("item") or []
+    if not items:
+        return {}
+    it = items[0]
+    rt = {
+        "name": code,
+        "price": _safe_float(it.get("last_price")),
+        "change_pct": _safe_float(it.get("price_change_ratio_pct")),
+        "open": _safe_float(it.get("open_price")),
+        "high": _safe_float(it.get("high_price")),
+        "low": _safe_float(it.get("low_price")),
+        "pre_close": _safe_float(it.get("prev_price")),
+        "volume": _safe_float(it.get("volume")),
+        "amount": _safe_float(it.get("turnover")),
+    }
+    try:
+        vresp = _fuyao_get("/api/a-share/valuations/snapshot", {"thscodes": _fuyao_thscode(code)})
+        vit = ((vresp.get("data") or {}).get("item") or [{}])[0]
+        if vit:
+            rt["name"] = vit.get("name") or rt["name"]
+            rt["pe_ttm"] = _safe_float(vit.get("pe_ttm"))
+            rt["pb_ratio"] = _safe_float(vit.get("pb_mrq"))
+            rt["ps_ttm"] = _safe_float(vit.get("ps_ttm"))
+            rt["pcf_ttm"] = _safe_float(vit.get("pcf_ttm"))
+    except Exception:
+        pass
+    return rt
+
+
+def _search_fuyao(query: str) -> list:
+    """同花顺官方标的检索：按 thscode / ticker / 中文名解析标准标的。
+
+    返回 [{"thscode", "ticker", "name", "market", ...}]；解析失败返回空列表。
+    """
+    resp = _fuyao_get("/api/meta/tickers/search", {"q": query})
+    if resp.get("code") != 0:
+        return []
+    return (resp.get("data") or {}).get("item") or []
+
+
+# --- akshare (Priority 3, free) ---
 
 def _fetch_akshare_a(code: str, days: int):
     """Fetch A-share via akshare."""
@@ -220,6 +555,8 @@ def _fetch_akshare_a(code: str, days: int):
     df = df.rename(columns=col_map)
     _log(f"[{code}] Using akshare (free)")
     return _df_to_ohlcv(df, days), "akshare"
+
+
 
 
 def _fetch_akshare_hk(code: str, days: int):
@@ -245,7 +582,7 @@ def _fetch_akshare_hk(code: str, days: int):
     return _df_to_ohlcv(df, days), "akshare"
 
 
-# --- yfinance (Priority 3, free, fallback for all markets) ---
+# --- yfinance (Priority 4, free, fallback for all markets) ---
 
 def _fetch_yfinance(code: str, market: str, days: int):
     """Fetch any stock via yfinance (universal fallback)."""
@@ -283,6 +620,14 @@ def _fetch_yfinance(code: str, market: str, days: int):
 
 def _fetch_realtime_a(code: str) -> dict:
     """Fetch A-share realtime quote with fallback."""
+    # Try 同花顺官方 API first (fastest, official fields + valuation; needs key)
+    if _ths_api_key():
+        try:
+            rt = _fetch_realtime_fuyao(code)
+            if rt.get("price"):
+                return rt
+        except Exception:
+            pass
     # Try akshare spot (most reliable for realtime)
     if _check_source("akshare"):
         try:
@@ -326,6 +671,13 @@ def _fetch_realtime_a(code: str) -> dict:
                 }
         except Exception:
             pass
+    # Try 同花顺 (free, stdlib-only; works when EastMoney endpoints are blocked)
+    try:
+        rt = _fetch_realtime_ths(code)
+        if rt.get("price"):
+            return rt
+    except Exception:
+        pass
     # yfinance fallback (works even when akshare/efinance endpoints are blocked)
     if _check_source("yfinance"):
         try:
@@ -405,7 +757,7 @@ def _fetch_realtime_us(code: str) -> dict:
 # --- Priority router ---
 
 def fetch_cn_a(code: str, days: int) -> dict:
-    """Fetch A-share with priority: Tushare > efinance > akshare > yfinance."""
+    """Fetch A-share with priority: Tushare > 同花顺官方API(有Key) > efinance > 同花顺 > akshare > yfinance."""
     ohlcv = None
     source = "unknown"
     errors = []
@@ -417,21 +769,35 @@ def fetch_cn_a(code: str, days: int) -> dict:
         except Exception as e:
             errors.append(f"tushare: {e}")
 
-    # Priority 1: efinance
+    # Priority 1: 同花顺官方 API (需 HITHINK_FINANCE_API_KEY, 前复权+结构化字段)
+    if ohlcv is None and _ths_api_key():
+        try:
+            ohlcv, source = _fetch_fuyao_a(code, days)
+        except Exception as e:
+            errors.append(f"ths_api: {e}")
+
+    # Priority 2: efinance
     if ohlcv is None and _check_source("efinance"):
         try:
             ohlcv, source = _fetch_efinance_a(code, days)
         except Exception as e:
             errors.append(f"efinance: {e}")
 
-    # Priority 2: akshare
+    # Priority 3: 同花顺 (free, no pip dependency)
+    if ohlcv is None:
+        try:
+            ohlcv, source = _fetch_ths_a(code, days)
+        except Exception as e:
+            errors.append(f"ths: {e}")
+
+    # Priority 4: akshare
     if ohlcv is None and _check_source("akshare"):
         try:
             ohlcv, source = _fetch_akshare_a(code, days)
         except Exception as e:
             errors.append(f"akshare: {e}")
 
-    # Priority 3: yfinance (universal fallback)
+    # Priority 5: yfinance (universal fallback)
     if ohlcv is None and _check_source("yfinance"):
         try:
             ohlcv, source = _fetch_yfinance(code, "cn_a", days)
@@ -917,6 +1283,20 @@ def analyze_stock(code: str, days: int = 120, fetch_news: bool = False) -> dict:
     """Full analysis pipeline for a single stock."""
     market, normalized, display = classify_stock(code)
 
+    # 中文公司名解析：优先用同花顺官方标的检索消歧（需 HITHINK_FINANCE_API_KEY）
+    if market == "unknown" and _ths_api_key():
+        try:
+            hits = _search_fuyao(code)
+            a_share = [h for h in hits if h.get("market") == "A股" or str(h.get("thscode", "")).endswith((".SH", ".SZ", ".BJ"))]
+            if a_share:
+                thscode = a_share[0]["thscode"]
+                normalized = thscode.rsplit(".", 1)[0]
+                market = "cn_a"
+                display = normalized
+                _log(f"[{code}] 同花顺官方API解析为 {thscode} ({a_share[0].get('name', '')})")
+        except Exception as e:
+            _log(f"[{code}] 同花顺官方API标的检索失败: {e}")
+
     if market == "unknown":
         raise ValueError(f"Cannot classify stock code: {code}")
 
@@ -991,9 +1371,10 @@ def main():
 
     # Report available data sources
     sources_status = {}
-    for lib in ["tushare", "efinance", "akshare", "yfinance"]:
+    for lib in ["tushare", "efinance", "ths", "akshare", "yfinance"]:
         sources_status[lib] = "available" if _check_source(lib) else "not installed"
     sources_status["tushare_token"] = "configured" if os.environ.get("TUSHARE_TOKEN") else "not set"
+    sources_status["ths_api"] = "configured" if _ths_api_key() else "not set"
     sources_status["tavily_api"] = "configured" if os.environ.get("TAVILY_API_KEY") else "not set"
     sources_status["serpapi"] = "configured" if os.environ.get("SERPAPI_KEY") else "not set"
     _log(f"Data sources: {json.dumps(sources_status)}")

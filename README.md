@@ -12,7 +12,7 @@
 | 特性              | 说明                                            |
 | ----------------- | ----------------------------------------------- |
 | **三大市场**      | A股（600519）、港股（HK00700）、美股（TSLA）    |
-| **智能数据源**    | 分级降级策略，支持 Tushare/efinance/akshare/yfinance |
+| **智能数据源**    | 分级降级策略，支持 Tushare/同花顺官方API/efinance/同花顺/akshare/yfinance |
 | **完整技术分析**  | MA / MACD / RSI / 量能 / 乖离率 / 支撑位        |
 | **100分评分系统** | 6维度综合评分，自动生成买卖信号                 |
 | **AI 深度分析**   | Claude 自身作为分析引擎，综合技术面+消息面      |
@@ -173,13 +173,14 @@ TSLA 当前处于明显的空头格局，MA 三线空头排列，MACD 死叉...
 | 环境变量 | 用途 | 获取方式 | 免费额度 |
 | -------- | ---- | -------- | -------- |
 | `TUSHARE_TOKEN` | A股专业数据（优先级最高） | [tushare.pro](https://tushare.pro) 注册 | 基础接口免费 |
+| `HITHINK_FINANCE_API_KEY` | 同花顺官方数据API（A股前复权行情+估值+标的检索，优先级仅次于 Tushare）。官方推荐变量名，REST/MCP/CLI/Python 共用；`FUYAO_API_KEY`、`THS_API_KEY` 仍作兼容别名 | [fuyao.aicubes.cn](https://fuyao.aicubes.cn) 登录签发 | 需同花顺账号 |
 | `TAVILY_API_KEY` | 新闻搜索（优先级最高） | [tavily.com](https://tavily.com) 注册 | 1000次/月 |
 | `SERPAPI_KEY` | 新闻搜索（备选） | [serpapi.com](https://serpapi.com) 注册 | 100次/月 |
 
 ### 行情数据降级链
 
 ```
-A股:  Tushare Pro → efinance → akshare → yfinance
+A股:  Tushare Pro → 同花顺官方API(有Key) → efinance → 同花顺 → akshare → yfinance
 港股:  efinance → akshare → yfinance
 美股:  yfinance（主力）
 ```
@@ -195,9 +196,11 @@ Tavily → SerpAPI → Claude WebSearch（兜底，无需配置）
 | 市场 | 优先级 | 数据源 | Python 库 | 费用 |
 | ---- | ------ | ------ | --------- | ---- |
 | A股  | P0 | Tushare Pro | tushare | 免费（需注册） |
-| A股  | P1 | 东方财富 | efinance | 免费 |
-| A股  | P2 | 东方财富 | akshare | 免费 |
-| A股  | P3 | Yahoo Finance | yfinance | 免费 |
+| A股  | P1 | 同花顺官方API | stdlib 直连（需 HITHINK_FINANCE_API_KEY） | 需同花顺账号 |
+| A股  | P2 | 东方财富 | efinance | 免费 |
+| A股  | P3 | 同花顺 | 无（stdlib 直连） | 免费 |
+| A股  | P4 | 东方财富 | akshare | 免费 |
+| A股  | P5 | Yahoo Finance | yfinance | 免费 |
 | 港股 | P1 | 东方财富 | efinance | 免费 |
 | 港股 | P2 | 东方财富 | akshare | 免费 |
 | 港股 | P3 | Yahoo Finance | yfinance | 免费 |
