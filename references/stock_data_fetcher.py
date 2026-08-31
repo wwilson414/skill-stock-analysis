@@ -34,13 +34,24 @@ warnings.filterwarnings("ignore")
 _AVAILABLE_SOURCES = {}
 
 def _check_source(name):
-    """Lazy-check if a data source library is importable."""
+    """Lazy-check if a data source library is importable AND usable.
+
+    Some installs (e.g. broken efinance) import at top level but lack the
+    subpackage we actually call (efinance.stock), so verify the subpackage
+    too instead of failing later at fetch time.
+    """
     if name not in _AVAILABLE_SOURCES:
         try:
-            __import__(name)
+            mod = __import__(name)
+            if name == "efinance":
+                import importlib
+                importlib.import_module("efinance.stock")
+                if getattr(mod, "stock", None) is None:
+                    raise ImportError("efinance.stock subpackage unavailable")
             _AVAILABLE_SOURCES[name] = True
-        except ImportError:
+        except Exception as e:
             _AVAILABLE_SOURCES[name] = False
+            _log(f"Data source '{name}' unusable: {type(e).__name__}: {e}")
     return _AVAILABLE_SOURCES[name]
 
 def _log(msg):
@@ -258,8 +269,12 @@ def _fetch_yfinance(code: str, market: str, days: int):
         })
     for i in range(1, len(ohlcv)):
         prev = ohlcv[i - 1]["close"]
-        if prev and prev > 0:
-            ohlcv[i]["pct_chg"] = round((ohlcv[i]["close"] - prev) / prev * 100, 2)
+        curr = ohlcv[i]["close"]
+        # Both closes must be valid (not None) to compute pct_chg;
+        # yfinance may return NaN rows (e.g. halted/no-volume days)
+        # which _safe_float() converts to None.
+        if prev is not None and curr is not None and prev > 0:
+            ohlcv[i]["pct_chg"] = round((curr - prev) / prev * 100, 2)
     _log(f"[{code}] Using yfinance (free, fallback)")
     return ohlcv, "yfinance"
 
@@ -308,6 +323,28 @@ def _fetch_realtime_a(code: str) -> dict:
                     "name": str(r.get("股票名称", code)),
                     "price": _safe_float(r.get("最新价")),
                     "change_pct": _safe_float(r.get("涨跌幅")),
+                }
+        except Exception:
+            pass
+    # yfinance fallback (works even when akshare/efinance endpoints are blocked)
+    if _check_source("yfinance"):
+        try:
+            import yfinance as yf
+            info = yf.Ticker(to_yfinance_code(code, "cn_a")).info
+            if info:
+                return {
+                    "name": info.get("shortName") or info.get("longName") or code,
+                    "price": _safe_float(info.get("currentPrice") or info.get("regularMarketPrice")),
+                    "change_pct": _safe_float(info.get("regularMarketChangePercent")),
+                    "pe_ratio": _safe_float(info.get("trailingPE")),
+                    "pb_ratio": _safe_float(info.get("priceToBook")),
+                    "total_mv": _safe_float(info.get("marketCap")),
+                    "high": _safe_float(info.get("dayHigh")),
+                    "low": _safe_float(info.get("dayLow")),
+                    "open": _safe_float(info.get("regularMarketOpen")),
+                    "pre_close": _safe_float(info.get("regularMarketPreviousClose")),
+                    "week_52_high": _safe_float(info.get("fiftyTwoWeekHigh")),
+                    "week_52_low": _safe_float(info.get("fiftyTwoWeekLow")),
                 }
         except Exception:
             pass
@@ -406,7 +443,7 @@ def fetch_cn_a(code: str, days: int) -> dict:
 
     realtime = _fetch_realtime_a(code)
     name = realtime.get("name", code)
-    return {"ohlcv": ohlcv, "realtime": realtime, "name": name, "source": source}
+    return {"ohlcv": ohlcv, "realtime": realtime, "name": name, "source": source, "errors": errors}
 
 
 def fetch_hk(code: str, days: int) -> dict:
@@ -438,7 +475,7 @@ def fetch_hk(code: str, days: int) -> dict:
 
     realtime = _fetch_realtime_hk(code)
     name = realtime.get("name", f"HK{code}")
-    return {"ohlcv": ohlcv, "realtime": realtime, "name": name, "source": source}
+    return {"ohlcv": ohlcv, "realtime": realtime, "name": name, "source": source, "errors": errors}
 
 
 def fetch_us(code: str, days: int) -> dict:
@@ -921,6 +958,7 @@ def analyze_stock(code: str, days: int = 120, fetch_news: bool = False) -> dict:
         "market": market,
         "name": raw.get("name", display),
         "data_source": raw.get("source", "unknown"),
+        "fetch_errors": raw.get("errors", []),
         "realtime": raw.get("realtime", {}),
         "indicators": {
             "ma": ma,
