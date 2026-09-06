@@ -617,6 +617,155 @@ def _fetch_yfinance(code: str, market: str, days: int):
     return ohlcv, "yfinance"
 
 
+# --- 腾讯行情 (free, zero-dependency via stdlib, 国内直连稳定) ---
+#
+# 覆盖 港股/美股 K线(fqkline) 与实时报价(qt.gtimg.cn)。国内网络下东方财富
+# (efinance/akshare)连接常被重置、Yahoo(yfinance)对大陆 IP 常见持续 429，
+# 腾讯接口是国内可直连的稳定兜底。K线行格式为
+# [date, open, close, high, low, volume, ...]（注意 OCLH 顺序，非 OHLC）；
+# 实时报价为 GBK 编码、`~` 分隔的字段串。无鉴权、无官方配额说明，请控制频率。
+
+_QQ_US_SYMBOL_CACHE = {}
+
+
+def _qq_http_get(url: str, timeout: int = 12) -> bytes:
+    """GET a Tencent quote endpoint with browser-like headers (stdlib only)."""
+    import urllib.request
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 "
+                      "Safari/537.36",
+        "Referer": "https://gu.qq.com/",
+        "Accept": "*/*",
+    })
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
+
+
+def _qq_kline(symbol: str, days: int) -> list:
+    """Fetch daily qfq OHLCV rows for a Tencent symbol (hk00700 / usTSLA.OQ)."""
+    url = ("https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+           f"?param={symbol},day,,,{days},qfq")
+    payload = json.loads(_qq_http_get(url).decode("utf-8", errors="replace"))
+    if not isinstance(payload, dict) or payload.get("code") != 0:
+        raise ValueError(f"tencent kline bad response for {symbol}")
+    node = (payload.get("data") or {}).get(symbol) or {}
+    rows = node.get("qfqday") or node.get("day") or []
+    if not rows:
+        raise ValueError(f"tencent kline returned no rows for {symbol}")
+    ohlcv = []
+    for row in rows:
+        # row[6:] may be a dividend-info dict on HK qfq rows — ignore it.
+        try:
+            ohlcv.append({
+                "date": str(row[0]),
+                "open": _safe_float(row[1]),
+                "close": _safe_float(row[2]),
+                "high": _safe_float(row[3]),
+                "low": _safe_float(row[4]),
+                "volume": _safe_float(row[5]),
+                "amount": None, "pct_chg": None,
+            })
+        except (IndexError, TypeError, ValueError):
+            continue
+    return [r for r in ohlcv if r["close"] is not None]
+
+
+def _qq_add_pct_chg(ohlcv: list) -> list:
+    """Compute daily pct_chg from consecutive closes (Tencent rows lack it)."""
+    for i in range(1, len(ohlcv)):
+        prev, curr = ohlcv[i - 1]["close"], ohlcv[i]["close"]
+        if prev is not None and curr is not None and prev > 0:
+            ohlcv[i]["pct_chg"] = round((curr - prev) / prev * 100, 2)
+    return ohlcv
+
+
+def _qq_us_symbol(code: str) -> str:
+    """Resolve the US exchange suffix for Tencent symbols: .OQ(NASDAQ)/.N(NYSE)."""
+    if code in _QQ_US_SYMBOL_CACHE:
+        return _QQ_US_SYMBOL_CACHE[code]
+    last_err = None
+    for suffix in ("OQ", "N"):
+        symbol = f"us{code}.{suffix}"
+        try:
+            if _qq_kline(symbol, 5):
+                _QQ_US_SYMBOL_CACHE[code] = symbol
+                return symbol
+        except Exception as e:
+            last_err = e
+    raise last_err or ValueError(f"tencent: cannot resolve US symbol for {code}")
+
+
+def _fetch_qq_hk(code: str, days: int):
+    """Fetch HK stock via Tencent fqkline."""
+    ohlcv = _qq_kline(f"hk{code}", days + 10)[-days:]
+    if not ohlcv:
+        raise ValueError(f"tencent returned no data for HK{code}")
+    _log(f"[HK{code}] Using tencent/qq (free)")
+    return _qq_add_pct_chg(ohlcv), "tencent"
+
+
+def _fetch_qq_us(code: str, days: int):
+    """Fetch US stock via Tencent fqkline."""
+    symbol = _qq_us_symbol(code)
+    ohlcv = _qq_kline(symbol, days + 10)[-days:]
+    if not ohlcv:
+        raise ValueError(f"tencent returned no data for {symbol}")
+    _log(f"[{code}] Using tencent/qq (free, symbol={symbol})")
+    return _qq_add_pct_chg(ohlcv), "tencent"
+
+
+def _parse_qt_quote(body: str) -> dict:
+    """Parse a qt.gtimg.cn realtime quote line (GBK, `~`-separated fields).
+
+    Field layout (classic gtimg): 1=名称 3=现价 4=昨收 5=今开 6=成交量(手)
+    31=涨跌额 32=涨跌% 33=最高 34=最低 37=成交额(万) 38=换手率 39=市盈率
+    44=流通市值(亿) 45=总市值(亿) 46=市净率 — 港美股部分字段可能为空。
+    市值字段 ×1e8 换算为原币绝对值，与 efinance/yfinance 口径对齐。
+    """
+    import re
+    m = re.search(r'="([^"]*)"', body)
+    if not m:
+        return {}
+    f = m.group(1).split("~")
+
+    def g(i):
+        return f[i] if i < len(f) else ""
+
+    price = _safe_float(g(3))
+    if not price:
+        return {}
+
+    def raw(i):
+        v = _safe_float(g(i))
+        return v * 1e8 if v is not None else None
+
+    return {
+        "name": g(1),
+        "price": price,
+        "pre_close": _safe_float(g(4)),
+        "open": _safe_float(g(5)),
+        "volume": _safe_float(g(6)),
+        "change_amount": _safe_float(g(31)),
+        "change_pct": _safe_float(g(32)),
+        "high": _safe_float(g(33)),
+        "low": _safe_float(g(34)),
+        "amount": _safe_float(g(37)),
+        "turnover_rate": _safe_float(g(38)),
+        "pe_ratio": _safe_float(g(39)),
+        "circ_mv": raw(44),
+        "total_mv": raw(45),
+        "pb_ratio": _safe_float(g(46)),
+        "realtime_source": "tencent",
+    }
+
+
+def _fetch_realtime_qt(symbol: str) -> dict:
+    """Fetch one realtime quote from qt.gtimg.cn (GBK-encoded)."""
+    body = _qq_http_get(f"https://qt.gtimg.cn/q={symbol}").decode("gbk", errors="replace")
+    return _parse_qt_quote(body)
+
+
 # --- Realtime quote fetchers ---
 
 def _fetch_realtime_a(code: str) -> dict:
@@ -735,6 +884,7 @@ def _fetch_realtime_hk(code: str) -> dict:
                     "low": _safe_float(r.get("最低")),
                     "open": _safe_float(r.get("今开")),
                     "pre_close": _safe_float(r.get("昨日收盘")),
+                    "realtime_source": "efinance",
                 }
                 if rt["price"]:
                     return rt
@@ -757,9 +907,18 @@ def _fetch_realtime_hk(code: str) -> dict:
                     "pe_ratio": _safe_float(r.get("市盈率")),
                     "pb_ratio": _safe_float(r.get("市净率")),
                     "total_mv": _safe_float(r.get("总市值")),
+                    "realtime_source": "akshare",
                 }
         except Exception as e:
             _log(f"[HK{code}] akshare 实时快照失败: {e}")
+
+    # Priority 2.5: 腾讯实时报价 (free, stdlib-only, 国内直连稳定)
+    try:
+        rt = _fetch_realtime_qt(f"hk{code}")
+        if rt.get("price"):
+            return rt
+    except Exception as e:
+        _log(f"[HK{code}] tencent 实时快照失败: {e}")
 
     # Priority 3: yfinance (works when EastMoney endpoints are blocked)
     if _check_source("yfinance"):
@@ -781,6 +940,7 @@ def _fetch_realtime_hk(code: str) -> dict:
                     "pre_close": _safe_float(info.get("regularMarketPreviousClose")),
                     "week_52_high": _safe_float(info.get("fiftyTwoWeekHigh")),
                     "week_52_low": _safe_float(info.get("fiftyTwoWeekLow")),
+                    "realtime_source": "yfinance",
                 }
         except Exception as e:
             _log(f"[HK{code}] yfinance 实时快照失败: {e}")
@@ -788,31 +948,43 @@ def _fetch_realtime_hk(code: str) -> dict:
 
 
 def _fetch_realtime_us(code: str) -> dict:
-    """Fetch US realtime quote via yfinance."""
+    """Fetch US realtime quote: yfinance (fields richer) → tencent (国内直连稳定)."""
     try:
         import yfinance as yf
         info = yf.Ticker(code).info
-        return {
-            "name": info.get("shortName") or info.get("longName") or code,
-            "price": _safe_float(info.get("currentPrice") or info.get("regularMarketPrice")),
-            "change_pct": _safe_float(info.get("regularMarketChangePercent")),
-            "volume": _safe_float(info.get("regularMarketVolume")),
-            "pe_ratio": _safe_float(info.get("trailingPE")),
-            "pb_ratio": _safe_float(info.get("priceToBook")),
-            "total_mv": _safe_float(info.get("marketCap")),
-            "high": _safe_float(info.get("dayHigh")),
-            "low": _safe_float(info.get("dayLow")),
-            "open": _safe_float(info.get("regularMarketOpen")),
-            "pre_close": _safe_float(info.get("regularMarketPreviousClose")),
-            "week_52_high": _safe_float(info.get("fiftyTwoWeekHigh")),
-            "week_52_low": _safe_float(info.get("fiftyTwoWeekLow")),
-            "avg_volume": _safe_float(info.get("averageVolume")),
-            "dividend_yield": _safe_float(info.get("dividendYield")),
-            "sector": info.get("sector", ""),
-            "industry": info.get("industry", ""),
-        }
-    except Exception:
-        return {}
+        if info and (info.get("currentPrice") or info.get("regularMarketPrice")):
+            return {
+                "name": info.get("shortName") or info.get("longName") or code,
+                "price": _safe_float(info.get("currentPrice") or info.get("regularMarketPrice")),
+                "change_pct": _safe_float(info.get("regularMarketChangePercent")),
+                "volume": _safe_float(info.get("regularMarketVolume")),
+                "pe_ratio": _safe_float(info.get("trailingPE")),
+                "pb_ratio": _safe_float(info.get("priceToBook")),
+                "total_mv": _safe_float(info.get("marketCap")),
+                "high": _safe_float(info.get("dayHigh")),
+                "low": _safe_float(info.get("dayLow")),
+                "open": _safe_float(info.get("regularMarketOpen")),
+                "pre_close": _safe_float(info.get("regularMarketPreviousClose")),
+                "week_52_high": _safe_float(info.get("fiftyTwoWeekHigh")),
+                "week_52_low": _safe_float(info.get("fiftyTwoWeekLow")),
+                "avg_volume": _safe_float(info.get("averageVolume")),
+                "dividend_yield": _safe_float(info.get("dividendYield")),
+                "sector": info.get("sector", ""),
+                "industry": info.get("industry", ""),
+                "realtime_source": "yfinance",
+            }
+    except Exception as e:
+        _log(f"[{code}] yfinance 实时快照失败: {e}")
+    # 腾讯兜底 (free, stdlib-only, 国内直连稳定)
+    # 注意: 实时报价符号不带交易所后缀 (usTSLA), 带 .OQ/.N 反而查无此股;
+    # K线接口则相反, 必须带后缀 (见 _qq_us_symbol)。
+    try:
+        rt = _fetch_realtime_qt(f"us{code}")
+        if rt.get("price"):
+            return rt
+    except Exception as e:
+        _log(f"[{code}] tencent 实时快照失败: {e}")
+    return {}
 
 
 # --- Priority router ---
@@ -891,6 +1063,13 @@ def fetch_hk(code: str, days: int) -> dict:
         except Exception as e:
             errors.append(f"akshare: {e}")
 
+    # Priority 2.5: 腾讯 (free, stdlib-only, 国内直连稳定)
+    if ohlcv is None:
+        try:
+            ohlcv, source = _fetch_qq_hk(code, days)
+        except Exception as e:
+            errors.append(f"tencent: {e}")
+
     if ohlcv is None and _check_source("yfinance"):
         try:
             ohlcv, source = _fetch_yfinance(code, "cn_hk", days)
@@ -917,14 +1096,40 @@ def fetch_hk(code: str, days: int) -> dict:
 
 
 def fetch_us(code: str, days: int) -> dict:
-    """Fetch US stock via yfinance (primary source for US)."""
-    ohlcv, source = _fetch_yfinance(code, "us", days)
+    """Fetch US stock: tencent (国内直连稳定) → yfinance (fallback)."""
+    ohlcv = None
+    source = "unknown"
+    errors = []
+
+    # Priority 1: 腾讯 (free, stdlib-only, 国内直连稳定)
+    try:
+        ohlcv, source = _fetch_qq_us(code, days)
+    except Exception as e:
+        errors.append(f"tencent: {e}")
+
+    # Priority 2: yfinance (universal fallback)
+    if ohlcv is None and _check_source("yfinance"):
+        try:
+            ohlcv, source = _fetch_yfinance(code, "us", days)
+        except Exception as e:
+            errors.append(f"yfinance: {e}")
+
+    if ohlcv is None:
+        raise ValueError(f"All data sources failed for US {code}: {'; '.join(errors)}")
+
     realtime = _fetch_realtime_us(code)
-    if not realtime and ohlcv:
+    if not realtime.get("price") and ohlcv:
         last = ohlcv[-1]
-        realtime = {"name": code, "price": last["close"], "change_pct": last.get("pct_chg")}
+        realtime = {
+            **realtime,
+            "name": realtime.get("name") or code,
+            "price": last["close"],
+            "change_pct": last.get("pct_chg"),
+            "realtime_source": "last_daily_bar",
+        }
+        errors.append("realtime: all quote sources failed, using last daily bar")
     name = realtime.get("name", code)
-    return {"ohlcv": ohlcv, "realtime": realtime, "name": name, "source": source}
+    return {"ohlcv": ohlcv, "realtime": realtime, "name": name, "source": source, "errors": errors}
 
 
 # ============================================================
@@ -1487,6 +1692,7 @@ def main():
     sources_status = {}
     for lib in ["tushare", "efinance", "ths", "akshare", "yfinance"]:
         sources_status[lib] = "available" if _check_source(lib) else "not installed"
+    sources_status["tencent"] = "available (stdlib)"
     sources_status["tushare_token"] = "configured" if os.environ.get("TUSHARE_TOKEN") else "not set"
     sources_status["ths_api"] = "configured" if _ths_api_key() else "not set"
     sources_status["tavily_api"] = "configured" if os.environ.get("TAVILY_API_KEY") else "not set"

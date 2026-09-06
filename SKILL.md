@@ -56,8 +56,8 @@ metadata:
 | 格式 | 市场 | 示例 | 数据源 |
 |------|------|------|--------|
 | 6位数字 (6/0/3开头) | A股 | 600519, 000001, 300750 | 同花顺官方API/同花顺/akshare |
-| HK + 5位数字 | 港股 | HK00700, HK09988 | efinance/akshare |
-| 1-5位大写字母 | 美股 | AAPL, TSLA, PLTR | yfinance |
+| HK + 5位数字 | 港股 | HK00700, HK09988 | efinance/akshare/腾讯行情 |
+| 1-5位大写字母 | 美股 | AAPL, TSLA, PLTR | 腾讯行情/yfinance |
 | 中文公司名（需配置HITHINK_FINANCE_API_KEY） | A股 | 贵州茅台 | 同花顺官方API检索 |
 
 ### 处理逻辑
@@ -79,8 +79,8 @@ metadata:
 
 **行情数据降级链**：
 - A股: Tushare Pro → 同花顺官方API(有Key) → efinance → 同花顺 → akshare → yfinance
-- 港股: efinance → akshare → yfinance
-- 美股: yfinance（主力）
+- 港股: efinance → akshare → 腾讯行情 → yfinance
+- 美股: 腾讯行情（主力，国内直连稳定）→ yfinance
 
 **新闻降级链**：Tavily → SerpAPI → Claude WebSearch（兜底）
 

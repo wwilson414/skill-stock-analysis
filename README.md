@@ -181,8 +181,8 @@ TSLA 当前处于明显的空头格局，MA 三线空头排列，MACD 死叉...
 
 ```
 A股:  Tushare Pro → 同花顺官方API(有Key) → efinance → 同花顺 → akshare → yfinance
-港股:  efinance → akshare → yfinance
-美股:  yfinance（主力）
+港股:  efinance → akshare → 腾讯行情 → yfinance
+美股:  腾讯行情（主力，国内直连稳定）→ yfinance
 ```
 
 ### 新闻降级链
@@ -204,8 +204,10 @@ A股:  akshare 东方财富个股新闻（免费无Key）→ Tavily → SerpAPI(
 | A股  | P5 | Yahoo Finance | yfinance | 免费 |
 | 港股 | P1 | 东方财富 | efinance | 免费 |
 | 港股 | P2 | 东方财富 | akshare | 免费 |
-| 港股 | P3 | Yahoo Finance | yfinance | 免费 |
-| 美股 | P0 | Yahoo Finance | yfinance | 免费 |
+| 港股 | P3 | 腾讯行情 | 无（stdlib 直连） | 免费 |
+| 港股 | P4 | Yahoo Finance | yfinance | 免费 |
+| 美股 | P0 | 腾讯行情 | 无（stdlib 直连） | 免费 |
+| 美股 | P1 | Yahoo Finance | yfinance | 免费 |
 
 ## 项目结构
 
