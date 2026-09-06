@@ -28,6 +28,10 @@ For each stock, output one card separated by `---`:
 | 市净率 | {pb_ratio} |
 
 **技术面**
+- 阶段/位置: {phase_cn} | 120日区间位置 {range_pos_pct}% | 距MA60 {dist_ma60_pct:+.2f}% | 20日涨跌 {chg_20d_pct:+.2f}%
+- 相对强度: vs{bench_cn} 20日RS {rs_20d:+.2f}% | 60日RS {rs_60d:+.2f}%
+- 波动与风险位: ATR {atr} ({atr_pct}%) | 年化波动 {ann_vol_pct}% | 盈亏比 {rr_ratio}
+- 交易约束/事件: {limit_status_cn} | 30日内解禁 {unlock_pct_30d_str}
 - 均线: MA5={ma5} MA10={ma10} MA20={ma20} | {alignment_cn}
 - MACD: DIF={dif} DEA={dea} 柱={hist} | {macd_signal_cn}
 - RSI: RSI6={rsi6} RSI12={rsi12} RSI24={rsi24} | {rsi_zone_cn}
@@ -50,10 +54,15 @@ For each stock, output one card separated by `---`:
 |--------|--------|--------|
 | {entry} | {target} (+{pct}%) | {stop_loss} (-{pct}%) |
 
+> 目标价/止损价默认取自脚本 `indicators.risk`（target_suggested / stop_suggested，ATR 波动率自适应），AI 不得另行编造。
+
+**消息面汇总**
+情绪: {sentiment_label_cn} (score {sentiment_score}, 时间衰减加权) | 重大风险: {has_major_risk_cn} | 事件类型: {event_types_cn}
+
 **最新消息**
-- {news1}
-- {news2}
-- {news3}
+- [{date}] [{sentiment_cn}] {title}（{event_type_cn}）
+- [{date}] [{sentiment_cn}] {title}（{event_type_cn}）
+- [{date}] [{sentiment_cn}] {title}（{event_type_cn}）
 
 ---
 ```
@@ -113,6 +122,36 @@ For each stock, output one card separated by `---`:
 | neutral | 中性 |
 | weak | 弱势 |
 | oversold | 超卖 |
+
+### Phase (阶段) Chinese Mapping
+
+| English | Chinese |
+|---------|---------|
+| uptrend_pullback | 上升趋势回调 |
+| downtrend_decline | 下跌趋势阴跌 |
+| range_swing | 区间震荡 |
+| insufficient_data | 数据不足 |
+
+### Limit Status (涨跌停状态) Chinese Mapping
+
+| English | Chinese |
+|---------|---------|
+| limit_up | 涨停封板（今日买入不可执行） |
+| near_limit_up | 接近涨停 |
+| limit_down | 跌停（止损可能无法成交） |
+| near_limit_down | 接近跌停 |
+| normal | 正常 |
+| unknown | 未知 |
+| not_applicable | 无涨跌停限制 |
+
+### News Sentiment Chinese Mapping
+
+| English | Chinese |
+|---------|---------|
+| positive | 偏多 |
+| negative | 偏空 |
+| neutral | 中性 |
+| mixed | 多空交织 |
 
 ### Footer
 

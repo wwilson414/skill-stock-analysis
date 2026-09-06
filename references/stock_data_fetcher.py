@@ -4,10 +4,13 @@ Stock Data Fetcher + Technical Indicator Calculator
 Outputs structured JSON for Claude Code analysis.
 No AI/LLM calls -- pure data + math.
 
+复权口径: 降级链所有数据源统一为前复权(qfq)，详见 _SOURCE_ADJUSTMENT 注释。
+任一源取数失败直接抛错切换下一源，绝不静默降级为不复权数据。
+
 Data source priority (graceful degradation):
   A-share: Tushare Pro (if TUSHARE_TOKEN set) > 同花顺官方API(if HITHINK_FINANCE_API_KEY set) > efinance > 同花顺(THS) > akshare > yfinance
-  HK:      efinance > akshare > yfinance
-  US:      yfinance (primary)
+  HK:      efinance > akshare > 腾讯行情 > yfinance
+  US:      腾讯行情 > yfinance
 
 News search priority (via --news flag):
   A股:   akshare 东方财富个股新闻 (free, no key) > Tavily > SerpAPI > skip (use WebSearch in Claude)
@@ -148,7 +151,12 @@ def _df_to_ohlcv(df, days):
 # --- Tushare Pro (Priority 0, needs TUSHARE_TOKEN) ---
 
 def _fetch_tushare_a(code: str, days: int):
-    """Fetch A-share via Tushare Pro. Returns (ohlcv, source) or raises."""
+    """Fetch A-share via Tushare Pro (qfq 前复权). Returns (ohlcv, source) or raises.
+
+    复权统一: 必须用 pro_bar(adj='qfq')。pro.daily() 是不复权数据，除权除息日
+    会产生假跳空，污染 MA/MACD/RSI/回撤。pro_bar 失败时直接抛错，让降级链
+    切换到下一个前复权源，绝不静默降级到不复权。
+    """
     token = os.environ.get("TUSHARE_TOKEN")
     if not token:
         raise EnvironmentError("TUSHARE_TOKEN not set")
@@ -157,7 +165,8 @@ def _fetch_tushare_a(code: str, days: int):
     ts_code = f"{code}.SH" if code.startswith(("600", "601", "603", "688")) else f"{code}.SZ"
     end_date = datetime.now().strftime("%Y%m%d")
     start_date = (datetime.now() - timedelta(days=days * 2)).strftime("%Y%m%d")
-    df = pro.daily(ts_code=ts_code, start_date=start_date, end_date=end_date)
+    df = ts.pro_bar(ts_code=ts_code, api=pro, adj="qfq",
+                    start_date=start_date, end_date=end_date)
     if df is None or df.empty:
         raise ValueError(f"Tushare returned no data for {code}")
     col_map = {
@@ -167,7 +176,7 @@ def _fetch_tushare_a(code: str, days: int):
     }
     df = df.rename(columns=col_map)
     df["date"] = df["date"].apply(lambda x: f"{x[:4]}-{x[4:6]}-{x[6:]}" if len(str(x)) == 8 else x)
-    _log(f"[{code}] Using Tushare Pro (premium)")
+    _log(f"[{code}] Using Tushare Pro (qfq 前复权)")
     return _df_to_ohlcv(df, days), "tushare"
 
 
@@ -176,7 +185,7 @@ def _fetch_tushare_a(code: str, days: int):
 def _fetch_efinance_a(code: str, days: int):
     """Fetch A-share via efinance (EastMoney). Returns (ohlcv, source) or raises."""
     import efinance as ef
-    df = ef.stock.get_quote_history(code)
+    df = ef.stock.get_quote_history(code, fqt=1)  # fqt=1: 前复权（显式指定，防默认值变化）
     if df is None or df.empty:
         raise ValueError(f"efinance returned no data for {code}")
     col_map = {
@@ -185,14 +194,14 @@ def _fetch_efinance_a(code: str, days: int):
         "成交额": "amount", "涨跌幅": "pct_chg",
     }
     df = df.rename(columns=col_map)
-    _log(f"[{code}] Using efinance (free)")
+    _log(f"[{code}] Using efinance (qfq 前复权)")
     return _df_to_ohlcv(df, days), "efinance"
 
 
 def _fetch_efinance_hk(code: str, days: int):
     """Fetch HK stock via efinance."""
     import efinance as ef
-    df = ef.stock.get_quote_history(code, stock_type="hk")
+    df = ef.stock.get_quote_history(code, stock_type="hk", fqt=1)  # fqt=1: 前复权
     if df is None or df.empty:
         raise ValueError(f"efinance returned no data for HK{code}")
     col_map = {
@@ -201,7 +210,7 @@ def _fetch_efinance_hk(code: str, days: int):
         "成交额": "amount", "涨跌幅": "pct_chg",
     }
     df = df.rename(columns=col_map)
-    _log(f"[HK{code}] Using efinance (free)")
+    _log(f"[HK{code}] Using efinance (qfq 前复权)")
     return _df_to_ohlcv(df, days), "efinance"
 
 
@@ -536,16 +545,12 @@ def _search_fuyao(query: str) -> list:
 # --- akshare (Priority 3, free) ---
 
 def _fetch_akshare_a(code: str, days: int):
-    """Fetch A-share via akshare."""
+    """Fetch A-share via akshare (qfq 前复权). 失败直接抛错交由降级链，绝不降级为不复权。"""
     import akshare as ak
     end_date = datetime.now().strftime("%Y%m%d")
     start_date = (datetime.now() - timedelta(days=days * 2)).strftime("%Y%m%d")
-    try:
-        df = ak.stock_zh_a_hist(symbol=code, period="daily",
-                                start_date=start_date, end_date=end_date, adjust="qfq")
-    except Exception:
-        df = ak.stock_zh_a_hist(symbol=code, period="daily",
-                                start_date=start_date, end_date=end_date, adjust="")
+    df = ak.stock_zh_a_hist(symbol=code, period="daily",
+                            start_date=start_date, end_date=end_date, adjust="qfq")
     if df is None or df.empty:
         raise ValueError(f"akshare returned no data for {code}")
     col_map = {
@@ -554,23 +559,19 @@ def _fetch_akshare_a(code: str, days: int):
         "成交额": "amount", "涨跌幅": "pct_chg",
     }
     df = df.rename(columns=col_map)
-    _log(f"[{code}] Using akshare (free)")
+    _log(f"[{code}] Using akshare (qfq 前复权)")
     return _df_to_ohlcv(df, days), "akshare"
 
 
 
 
 def _fetch_akshare_hk(code: str, days: int):
-    """Fetch HK stock via akshare."""
+    """Fetch HK stock via akshare (qfq 前复权). 失败直接抛错交由降级链，绝不降级为不复权。"""
     import akshare as ak
     end_date = datetime.now().strftime("%Y%m%d")
     start_date = (datetime.now() - timedelta(days=days * 2)).strftime("%Y%m%d")
-    try:
-        df = ak.stock_hk_hist(symbol=code, period="daily",
-                              start_date=start_date, end_date=end_date, adjust="qfq")
-    except Exception:
-        df = ak.stock_hk_hist(symbol=code, period="daily",
-                              start_date=start_date, end_date=end_date, adjust="")
+    df = ak.stock_hk_hist(symbol=code, period="daily",
+                          start_date=start_date, end_date=end_date, adjust="qfq")
     if df is None or df.empty:
         raise ValueError(f"akshare returned no data for HK{code}")
     col_map = {
@@ -579,7 +580,7 @@ def _fetch_akshare_hk(code: str, days: int):
         "成交额": "amount", "涨跌幅": "pct_chg",
     }
     df = df.rename(columns=col_map)
-    _log(f"[HK{code}] Using akshare (free)")
+    _log(f"[HK{code}] Using akshare (qfq 前复权)")
     return _df_to_ohlcv(df, days), "akshare"
 
 
@@ -590,7 +591,8 @@ def _fetch_yfinance(code: str, market: str, days: int):
     import yfinance as yf
     yf_code = to_yfinance_code(code, market)
     ticker = yf.Ticker(yf_code)
-    hist = ticker.history(period=f"{days}d")
+    # auto_adjust=True: 前复权口径，与 A股 qfq 链路统一（旧版 yfinance 默认 False，必须显式）
+    hist = ticker.history(period=f"{days}d", auto_adjust=True)
     if hist is None or hist.empty:
         raise ValueError(f"yfinance returned no data for {yf_code}")
     ohlcv = []
@@ -989,6 +991,18 @@ def _fetch_realtime_us(code: str) -> dict:
 
 # --- Priority router ---
 
+# 复权口径审计（2026-09 实测核验）: 降级链所有源统一为前复权(qfq)，
+# 任一源失败直接抛错切到下一源，绝不静默降级为不复权。
+# - tushare:   pro_bar(adj='qfq')          （pro.daily() 是不复权，已弃用）
+# - ths_api:   官方API adjust=forward 前复权
+# - efinance:  get_quote_history(fqt=1) 前复权
+# - ths:       d.10jqka.com.cn /01/ 段即前复权（与腾讯 qfq 逐点核对一致）
+# - akshare:   stock_zh_a_hist / stock_hk_hist adjust='qfq'
+# - tencent:   fqkline param=...,qfq
+# - yfinance:  history(auto_adjust=True)
+_SOURCE_ADJUSTMENT = "qfq (前复权)"
+
+
 def fetch_cn_a(code: str, days: int) -> dict:
     """Fetch A-share with priority: Tushare > 同花顺官方API(有Key) > efinance > 同花顺 > akshare > yfinance."""
     ohlcv = None
@@ -1042,7 +1056,8 @@ def fetch_cn_a(code: str, days: int) -> dict:
 
     realtime = _fetch_realtime_a(code)
     name = realtime.get("name", code)
-    return {"ohlcv": ohlcv, "realtime": realtime, "name": name, "source": source, "errors": errors}
+    return {"ohlcv": ohlcv, "realtime": realtime, "name": name, "source": source,
+            "adjustment": _SOURCE_ADJUSTMENT, "errors": errors}
 
 
 def fetch_hk(code: str, days: int) -> dict:
@@ -1092,7 +1107,8 @@ def fetch_hk(code: str, days: int) -> dict:
         }
         errors.append("realtime: all quote sources failed, using last daily bar")
     name = realtime.get("name") or f"HK{code}"
-    return {"ohlcv": ohlcv, "realtime": realtime, "name": name, "source": source, "errors": errors}
+    return {"ohlcv": ohlcv, "realtime": realtime, "name": name, "source": source,
+            "adjustment": _SOURCE_ADJUSTMENT, "errors": errors}
 
 
 def fetch_us(code: str, days: int) -> dict:
@@ -1194,6 +1210,7 @@ def search_news(stock_name: str, code: str, max_results: int = 5, market: str = 
                     "title": r.get("title", ""),
                     "content": r.get("content", "")[:200],
                     "url": r.get("url", ""),
+                    "date": r.get("published_date") or r.get("publishedDate"),
                     "source": "tavily",
                 })
             if results:
@@ -1223,6 +1240,7 @@ def search_news(stock_name: str, code: str, max_results: int = 5, market: str = 
                     "title": r.get("title", ""),
                     "content": r.get("snippet", "") or r.get("body", "")[:200],
                     "url": r.get("link", ""),
+                    "date": r.get("date"),  # Google News: 相对时间串如 "3 days ago"
                     "source": "serpapi",
                 })
             if results:
@@ -1234,6 +1252,159 @@ def search_news(stock_name: str, code: str, max_results: int = 5, market: str = 
     # No news source available — return empty, let Claude use WebSearch
     _log(f"[{code}] No news source available, skipping (Claude will use WebSearch)")
     return []
+
+
+# --- News structuring: dates + time decay + deterministic sentiment ---
+
+def _parse_news_date(raw):
+    """Parse a news date string into ISO 'YYYY-MM-DD' (or None).
+
+    Handles absolute formats, ISO with timezone, and relative strings from
+    Google News/Tavily ("3 days ago", "x小时前", "昨天"...).
+    """
+    if not raw:
+        return None
+    raw = str(raw).strip()
+    fmts = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d",
+            "%Y/%m/%d %H:%M:%S", "%Y/%m/%d", "%Y年%m月%d日 %H:%M", "%Y年%m月%d日")
+    for f in fmts:
+        try:
+            return datetime.strptime(raw, f).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    import re
+    m = re.match(r"(\d{4}-\d{1,2}-\d{1,2})", raw)
+    if m:
+        try:
+            return datetime.strptime(m.group(1), "%Y-%m-%d").strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+    now = datetime.now()
+    # relative English: "3 days ago", "2 hours ago", "5 months ago" ...
+    m = re.search(r"(\d+)\s*(minutes?|hours?|days?|weeks?|months?)\s*ago", raw, re.I)
+    if m:
+        num, unit = int(m.group(1)), m.group(2).lower()
+        delta = {"minute": timedelta(minutes=num), "hour": timedelta(hours=num),
+                 "day": timedelta(days=num), "week": timedelta(weeks=num),
+                 "month": timedelta(days=30 * num)}
+        for k, v in delta.items():
+            if unit.startswith(k):
+                return (now - v).strftime("%Y-%m-%d")
+        return None
+    # relative Chinese: "3天前", "12小时前", "2个月前" ...
+    m = re.search(r"(\d+)\s*(分钟|小时|天|周|个月|月)前", raw)
+    if m:
+        num, unit = int(m.group(1)), m.group(2)
+        delta = {"分钟": timedelta(minutes=num), "小时": timedelta(hours=num),
+                 "天": timedelta(days=num), "周": timedelta(weeks=num),
+                 "个月": timedelta(days=30 * num), "月": timedelta(days=30 * num)}
+        return (now - delta[unit]).strftime("%Y-%m-%d")
+    if "yesterday" in raw.lower() or "昨天" in raw:
+        return (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    if "today" in raw.lower() or "今天" in raw:
+        return now.strftime("%Y-%m-%d")
+    return None
+
+
+_NEWS_POSITIVE = [
+    "利好", "预增", "净利增长", "净利润增长", "同比增长", "超预期", "新高",
+    "中标", "中选", "签订", "签约", "重大合同", "回购", "增持", "分红", "派息",
+    "派现", "上调", "获批", "合作", "扩产", "涨价", "提价", "扭亏", "盈利",
+]
+_NEWS_NEGATIVE = [
+    "利空", "预亏", "首亏", "亏损", "净利下滑", "净利润下降", "同比下降",
+    "低于预期", "减持", "拟减持", "清仓", "解禁", "质押", "冻结", "处罚",
+    "罚款", "立案", "调查", "警示函", "监管函", "违规", "违法", "诉讼", "仲裁",
+    "商誉减值", "计提减值", "退市", "做空", "下调", "终止", "失败", "辞职",
+    "离职", "被查", "问询",
+]
+_MAJOR_RISK_KEYWORDS = [
+    "立案", "调查", "退市", "处罚", "违规", "违法", "商誉减值", "预亏",
+    "质押", "冻结", "做空", "问询",
+]
+_NEWS_EVENT_RULES = [
+    ("regulatory", ["处罚", "罚款", "立案", "调查", "警示函", "监管函", "违规",
+                    "违法", "问询", "诉讼", "仲裁", "退市"]),
+    ("shareholder_selling", ["减持", "清仓", "解禁", "质押"]),
+    ("buyback_holding", ["回购", "增持"]),
+    ("dividend", ["分红", "派息", "除权", "除息", "派现"]),
+    ("earnings", ["预增", "预亏", "季报", "年报", "中报", "业绩", "净利",
+                  "净利润", "扭亏", "亏损"]),
+    ("ma_restructuring", ["收购", "并购", "重组", "借壳", "定增", "募资"]),
+    ("contracts_growth", ["中标", "中选", "签订", "签约", "订单", "合作",
+                          "扩产", "涨价", "提价", "获批"]),
+]
+
+
+def analyze_news_sentiment(news_items: list) -> dict:
+    """Deterministic news structuring (mutates items in place, returns summary).
+
+    Per item adds: date (ISO), age_days, sentiment (positive/negative/neutral/
+    mixed), event_type (list), major_risk (bool).
+    Summary aggregates a time-decayed sentiment score in [-1, 1] with a
+    14-day half-life (undated items capped at weight 0.5) — makes the 30%
+    news weight reproducible instead of LLM-mood-dependent.
+    """
+    now = datetime.now()
+    total_w = pos_w = neg_w = 0.0
+    counts = {"positive": 0, "negative": 0, "neutral": 0, "mixed": 0}
+    event_types = set()
+    has_major_risk = False
+
+    for it in news_items:
+        text = f"{it.get('title', '')} {it.get('content', '')}"
+        iso = _parse_news_date(it.get("date"))
+        if iso:
+            it["date"] = iso
+            age = (now - datetime.strptime(iso, "%Y-%m-%d")).total_seconds() / 86400
+            it["age_days"] = round(max(age, 0.0), 1)
+        else:
+            it["age_days"] = None
+
+        pos = sum(1 for k in _NEWS_POSITIVE if k in text)
+        neg = sum(1 for k in _NEWS_NEGATIVE if k in text)
+        if neg and not pos:
+            s = "negative"
+        elif pos and not neg:
+            s = "positive"
+        elif pos and neg:
+            s = "mixed"
+        else:
+            s = "neutral"
+        it["sentiment"] = s
+        it["major_risk"] = any(k in text for k in _MAJOR_RISK_KEYWORDS)
+        evts = [name for name, kws in _NEWS_EVENT_RULES if any(k in text for k in kws)]
+        it["event_type"] = evts or ["other"]
+        event_types.update(evts)
+        has_major_risk = has_major_risk or it["major_risk"]
+
+        counts[s] = counts.get(s, 0) + 1
+        w = 0.5 ** (it["age_days"] / 14.0) if it["age_days"] is not None else 0.5
+        total_w += w
+        if s == "positive":
+            pos_w += w
+        elif s == "negative":
+            neg_w += w
+
+    news_items.sort(key=lambda x: x.get("age_days") if x.get("age_days") is not None else 9999)
+
+    sentiment_score = round((pos_w - neg_w) / total_w, 3) if total_w > 0 else 0.0
+    if sentiment_score >= 0.15:
+        label = "positive"
+    elif sentiment_score <= -0.15:
+        label = "negative"
+    else:
+        label = "neutral"
+    return {
+        "sentiment_score": sentiment_score,
+        "sentiment_label": label,
+        "counts": counts,
+        "event_types": sorted(event_types),
+        "has_major_risk": has_major_risk,
+        "dated_items": sum(1 for it in news_items if it.get("age_days") is not None),
+        "total_items": len(news_items),
+        "stale": all(it.get("age_days") is None for it in news_items) and bool(news_items),
+    }
 
 
 # ============================================================
@@ -1419,16 +1590,321 @@ def calc_rsi(closes: list, periods: list) -> dict:
     return result
 
 
+def calc_pullback_context(closes: list, ma_data: dict) -> dict:
+    """
+    Classify where the stock sits in its medium-term structure, so that
+    "low RSI / shrink pullback" is NOT blindly treated as oversold opportunity.
+
+    Distinguishes:
+    - uptrend_pullback:  上升趋势中的回调（价格在MA60上方、多头排列、
+                         从近期高点浅幅回落）→ 缩量回调/低RSI才可信
+    - downtrend_decline: 下跌趋势中的阴跌（空头排列或价格在MA60下方且
+                         持续走低）→ 低RSI是趋势走弱，不是超卖机会
+    - range_swing:       区间震荡
+    """
+    if len(closes) < 25:
+        return {"phase": "insufficient_data"}
+
+    curr = closes[-1]
+    window = closes[-120:] if len(closes) >= 120 else closes
+    hi, lo = max(window), min(window)
+
+    # Position within recent range: 0 = at low, 100 = at high
+    range_pos_pct = round((curr - lo) / (hi - lo) * 100, 1) if hi > lo else 50.0
+
+    # 20-day change (medium-term direction)
+    base_20 = closes[-21] if len(closes) >= 21 else closes[0]
+    chg_20d_pct = round((curr - base_20) / base_20 * 100, 2) if base_20 > 0 else None
+
+    # Drawdown from the recent high (within the lookback window)
+    off_high_pct = round((curr - hi) / hi * 100, 2) if hi > 0 else None
+
+    # Distance from MA60 (medium-term trend anchor)
+    ma60 = ma_data.get("MA60")
+    dist_ma60_pct = round((curr - ma60) / ma60 * 100, 2) if (ma60 and ma60 > 0) else None
+
+    alignment = ma_data.get("alignment", "consolidation")
+    strong_bearish_set = {"bearish", "strong_bearish"}
+
+    above_ma60 = dist_ma60_pct is not None and dist_ma60_pct > 0
+    below_ma60 = dist_ma60_pct is not None and dist_ma60_pct < 0
+    falling_20d = chg_20d_pct is not None and chg_20d_pct < -3
+    shallow_pullback = off_high_pct is not None and -12 <= off_high_pct < 0
+
+    # Downtrend dominates: clearly falling 20d, broken below MA60 while still
+    # sinking, or strongly bearish MA alignment. Short MA5/MA10 crosses on a
+    # 1-2 day dip are noise and must NOT alone flip the phase.
+    if falling_20d or alignment in strong_bearish_set or (below_ma60 and chg_20d_pct is not None and chg_20d_pct < 0):
+        phase = "downtrend_decline"
+    elif above_ma60 and shallow_pullback and not falling_20d:
+        phase = "uptrend_pullback"
+    else:
+        phase = "range_swing"
+
+    return {
+        "phase": phase,
+        "range_pos_pct": range_pos_pct,
+        "chg_20d_pct": chg_20d_pct,
+        "off_high_pct": off_high_pct,
+        "dist_ma60_pct": dist_ma60_pct,
+    }
+
+
+def calc_atr(bars: list, period: int = 14):
+    """Wilder ATR from aligned OHLC bars. Returns None if insufficient data."""
+    if len(bars) < period + 1:
+        return None
+    trs = []
+    for i in range(1, len(bars)):
+        h, l, pc = bars[i].get("high"), bars[i].get("low"), bars[i - 1]["close"]
+        if h is None or l is None or pc is None:
+            continue
+        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+    if len(trs) < period:
+        return None
+    atr = sum(trs[:period]) / period
+    for tr in trs[period:]:
+        atr = (atr * (period - 1) + tr) / period
+    return atr
+
+
+def calc_risk_levels(valid_bars: list, closes: list, ma_data: dict) -> dict:
+    """Volatility-aware stop/target levels with R:R, so the AI cannot hallucinate prices.
+
+    - stop: 结构位(MA20/20日低点)优先，但用 ATR 加缓冲并限制在
+      [现价-3ATR, 现价-1ATR] 区间内；无结构位时用现价-2ATR
+    - target: 近60日高点(阻力位)，且至少现价+3ATR
+    - rr_ratio = (target-close)/(close-stop)，<1.5 的买点在信号层被硬性拦截
+    """
+    out = {"atr": None, "atr_pct": None, "ann_vol_pct": None,
+           "stop_structural": None, "stop_suggested": None,
+           "target_suggested": None, "rr_ratio": None}
+    curr = closes[-1]
+    if curr is None or curr <= 0:
+        return out
+
+    atr = calc_atr(valid_bars, 14)
+
+    # Annualized volatility from last 20 daily returns
+    ann_vol = None
+    if len(closes) >= 22:
+        rets = []
+        for i in range(len(closes) - 20, len(closes)):
+            p0, p1 = closes[i - 1], closes[i]
+            if p0 and p1 and p0 > 0:
+                rets.append(p1 / p0 - 1)
+        if len(rets) >= 15:
+            mean = sum(rets) / len(rets)
+            var = sum((r - mean) ** 2 for r in rets) / (len(rets) - 1)
+            ann_vol = round(var ** 0.5 * 250 ** 0.5 * 100, 2)
+
+    out["atr"] = round(atr, 4) if atr else None
+    out["atr_pct"] = round(atr / curr * 100, 2) if atr else None
+    out["ann_vol_pct"] = ann_vol
+
+    if not atr or atr <= 0:
+        return out
+
+    # Structural stop: nearest support below price among MA20 / 20-day low
+    ma20 = ma_data.get("MA20")
+    low20 = min((b["low"] for b in valid_bars[-20:] if b.get("low") is not None),
+                default=None)
+    below = [x for x in (ma20, low20) if x is not None and x < curr]
+    if below:
+        structural = max(below)  # nearest support below price
+        out["stop_structural"] = round(structural, 4)
+        stop = structural - 0.25 * atr            # quarter-ATR buffer below structure
+        stop = max(min(stop, curr - atr), curr - 3 * atr)  # clamp to [1ATR, 3ATR]
+    else:
+        stop = curr - 2 * atr
+    out["stop_suggested"] = round(stop, 4)
+
+    # Target: 60-day high (resistance), at least curr + 3 ATR
+    high60 = max((b["high"] for b in valid_bars[-60:] if b.get("high") is not None),
+                 default=None)
+    target = max(x for x in (high60, curr + 3 * atr) if x is not None)
+    out["target_suggested"] = round(target, 4)
+
+    if stop < curr:
+        out["rr_ratio"] = round((target - curr) / (curr - stop), 2)
+    return out
+
+
+_BENCHMARKS = {
+    "cn_a": ("sh000300", "沪深300"),
+    "cn_hk": ("hkHSI", "恒生指数"),
+    "us": ("SPY", "标普500(SPY)"),
+}
+_BENCH_CACHE = {}
+
+
+def _benchmark_closes(market: str, days: int = 140):
+    """Benchmark index closes for RS. Tencent fqkline first, yfinance fallback.
+
+    Non-fatal by design: returns None when all sources fail, and RS scoring
+    then falls back to neutral. Results cached per market within one run.
+    """
+    if market not in _BENCHMARKS:
+        return None
+    if market in _BENCH_CACHE:
+        return _BENCH_CACHE[market]
+
+    symbol, _ = _BENCHMARKS[market]
+    closes = None
+
+    # Priority 1: tencent fqkline (stdlib only, qfq param harmless for indices)
+    try:
+        sym = _qq_us_symbol("SPY") if market == "us" else symbol
+        bars = _qq_kline(sym, days)
+        cl = [b["close"] for b in bars if b.get("close") is not None]
+        if len(cl) >= 61:
+            closes = cl
+            _log(f"[benchmark] {symbol} via tencent ({len(cl)} bars)")
+    except Exception as e:
+        _log(f"[benchmark] tencent {symbol} failed: {type(e).__name__}: {e}")
+
+    # Priority 2: yfinance
+    if closes is None and _check_source("yfinance"):
+        try:
+            import yfinance as yf
+            yf_sym = {"cn_a": "000300.SS", "cn_hk": "^HSI", "us": "SPY"}[market]
+            hist = yf.Ticker(yf_sym).history(period=f"{days}d", auto_adjust=True)
+            cl = [float(v) for v in hist["Close"].dropna().tolist()]
+            if len(cl) >= 61:
+                closes = cl
+                _log(f"[benchmark] {yf_sym} via yfinance ({len(cl)} bars)")
+        except Exception as e:
+            _log(f"[benchmark] yfinance {market} failed: {type(e).__name__}: {e}")
+
+    _BENCH_CACHE[market] = closes
+    return closes
+
+
+def calc_relative_strength(market: str, closes: list, bench_closes) -> dict:
+    """RS vs benchmark: stock N-day return minus benchmark N-day return."""
+    label = _BENCHMARKS.get(market, (None, "unknown"))[1]
+    out = {"benchmark": label, "stock_ret_20d": None, "stock_ret_60d": None,
+           "bench_ret_20d": None, "bench_ret_60d": None,
+           "rs_20d": None, "rs_60d": None}
+
+    def ret(vals, n):
+        if vals and len(vals) > n and vals[-n - 1] and vals[-n - 1] > 0:
+            return round((vals[-1] / vals[-n - 1] - 1) * 100, 2)
+        return None
+
+    out["stock_ret_20d"] = ret(closes, 20)
+    out["stock_ret_60d"] = ret(closes, 60)
+
+    if bench_closes:
+        out["bench_ret_20d"] = ret(bench_closes, 20)
+        out["bench_ret_60d"] = ret(bench_closes, 60)
+        if out["stock_ret_20d"] is not None and out["bench_ret_20d"] is not None:
+            out["rs_20d"] = round(out["stock_ret_20d"] - out["bench_ret_20d"], 2)
+        if out["stock_ret_60d"] is not None and out["bench_ret_60d"] is not None:
+            out["rs_60d"] = round(out["stock_ret_60d"] - out["bench_ret_60d"], 2)
+    return out
+
+
+def calc_tradability(realtime: dict, code: str, name: str = "") -> dict:
+    """A股涨跌停状态与买入可执行性（涨停买不进，跌停止损卖不出；T+1）。
+
+    板块阈值: 科创板(688/689)与创业板(300/301/302) 20%，北交所(43/83/87/88/92) 30%，
+    ST 5%，主板 10%。港/美无涨跌停限制 → not_applicable。
+    """
+    chg = realtime.get("change_pct")
+    if not (isinstance(code, str) and len(code) == 6 and code.isdigit()):
+        return {"limit_status": "not_applicable", "limit_threshold_pct": None,
+                "change_pct": chg}
+    if code.startswith(("688", "689", "300", "301", "302")):
+        th = 20.0
+    elif code.startswith(("43", "83", "87", "88", "92")):
+        th = 30.0
+    else:
+        th = 5.0 if "ST" in (name or "").upper() else 10.0
+
+    if chg is None:
+        status = "unknown"
+    elif chg >= th - 0.2:
+        status = "limit_up"
+    elif chg <= -(th - 0.2):
+        status = "limit_down"
+    elif chg >= 0.8 * th:
+        status = "near_limit_up"
+    elif chg <= -0.8 * th:
+        status = "near_limit_down"
+    else:
+        status = "normal"
+    return {"limit_status": status, "limit_threshold_pct": th, "change_pct": chg}
+
+
+def fetch_upcoming_unlocks(code: str, within_days: int = 60) -> list:
+    """A股限售解禁 upcoming events via akshare (best-effort, 非致命).
+
+    Returns list of {"date": "YYYY-MM-DD", "pct_of_float": float|None, "detail": str}
+    sorted by date, only events within [today, today+within_days]. [] on any failure.
+    """
+    if not _check_source("akshare"):
+        return []
+    import akshare as ak
+    today = datetime.now().date()
+    horizon = today + timedelta(days=within_days)
+
+    for fn_name in ("stock_restricted_release_stockholder_em",
+                    "stock_restricted_release_queue_sina"):
+        fn = getattr(ak, fn_name, None)
+        if fn is None:
+            continue
+        try:
+            df = fn(symbol=code)
+        except Exception:
+            continue
+        if df is None or getattr(df, "empty", True):
+            continue
+        out = []
+        try:
+            date_col = next((c for c in df.columns
+                             if "日期" in str(c) or "时间" in str(c)), None)
+            ratio_col = next((c for c in df.columns
+                              if "比例" in str(c) or "%" in str(c)), None)
+            qty_col = next((c for c in df.columns if "数量" in str(c)), None)
+            if date_col is None:
+                continue
+            for _, r in df.iterrows():
+                d = _parse_news_date(r.get(date_col))
+                if not d:
+                    continue
+                dd = datetime.strptime(d, "%Y-%m-%d").date()
+                if not (today <= dd <= horizon):
+                    continue
+                pct = None
+                if ratio_col is not None:
+                    v = _safe_float(r.get(ratio_col))
+                    if v is not None and 0 < v <= 100:
+                        pct = v
+                out.append({"date": d, "pct_of_float": pct,
+                            "detail": str(r.get(qty_col)) if qty_col is not None else ""})
+        except Exception:
+            continue
+        if out:
+            out.sort(key=lambda x: x["date"])
+            _log(f"[{code}] unlocks via akshare/{fn_name}: {len(out)} within {within_days}d")
+            return out
+    _log(f"[{code}] no upcoming unlock data (akshare endpoints unavailable)")
+    return []
+
+
 def calc_volume_analysis(volumes: list, closes: list) -> dict:
-    """Analyze volume patterns."""
+    """Analyze volume patterns. Tolerates None volumes (aligned with valid_bars)."""
     if len(volumes) < 6 or len(closes) < 2:
         return {"vol_ratio": None, "trend": "insufficient_data"}
 
-    # 5-day average volume (excluding today)
-    avg_vol_5 = sum(volumes[-6:-1]) / 5 if len(volumes) >= 6 else volumes[-1]
+    # 5-day average volume (excluding today); skip None/zero entries
+    prev5 = [v for v in volumes[-6:-1] if v]
     curr_vol = volumes[-1]
 
-    vol_ratio = round(curr_vol / avg_vol_5, 2) if avg_vol_5 > 0 else None
+    avg_vol_5 = (sum(prev5) / len(prev5)) if prev5 else None
+    vol_ratio = (round(curr_vol / avg_vol_5, 2)
+                 if (curr_vol and avg_vol_5) else None)
 
     # Price change direction
     price_up = closes[-1] >= closes[-2]
@@ -1489,51 +1965,88 @@ def calc_support(closes: list, ma_data: dict) -> dict:
 # ============================================================
 
 def calc_trend_score(ma_data: dict, macd_data: dict, rsi_data: dict,
-                     vol_data: dict, bias_data: dict, support_data: dict) -> dict:
+                     vol_data: dict, bias_data: dict, support_data: dict,
+                     context: dict = None) -> dict:
     """
     Composite scoring system (100 points total):
-    - Trend/MA alignment: 30 pts
+    - Trend/MA alignment: 26 pts
     - Bias (乖离率): 20 pts
     - Volume: 15 pts
     - MACD: 15 pts
     - RSI: 10 pts
+    - Relative Strength (vs benchmark): 4 pts
     - Support: 10 pts
+
+    Phase-aware: pullback context (calc_pullback_context) downgrades
+    "shrink pullback / low RSI / below-MA5 bias" rewards when the stock is in
+    a downtrend — those patterns are only buy signals inside an uptrend.
+
+    Buy gates (hard): downtrend_decline phase, or risk/reward ratio < 1.5
+    (context["rr_ratio"], from calc_risk_levels) — blocked from buy signals.
     """
     breakdown = {}
+    context = context or {}
+    phase = context.get("phase", "range_swing")
+    in_downtrend = phase == "downtrend_decline"
 
-    # 1. Trend score (30 pts)
+    # 1. Trend score (26 pts)
     alignment = ma_data.get("alignment_detail", "consolidation")
     trend_scores = {
-        "strong_bullish": 30, "bullish": 26, "weak_bullish": 18,
-        "consolidation": 12, "weak_bearish": 8, "bearish": 4,
-        "strong_bearish": 0, "insufficient_data": 12,
+        "strong_bullish": 26, "bullish": 22, "weak_bullish": 16,
+        "consolidation": 10, "weak_bearish": 7, "bearish": 3,
+        "strong_bearish": 0, "insufficient_data": 10,
     }
-    breakdown["trend"] = trend_scores.get(alignment, 12)
+    breakdown["trend"] = trend_scores.get(alignment, 10)
 
-    # 2. Bias score (20 pts) - prefer slightly below MA5
+    # 2. Bias score (20 pts) - prefer slightly below MA5, but only in uptrend
     bias_ma5 = bias_data.get("bias_ma5", 0)
-    if bias_ma5 is None:
-        breakdown["bias"] = 10
-    elif -3 <= bias_ma5 < 0:
-        breakdown["bias"] = 20  # Slightly below MA5 = ideal dip
-    elif 0 <= bias_ma5 < 2:
-        breakdown["bias"] = 18  # Close to MA5
-    elif 2 <= bias_ma5 < 5:
-        breakdown["bias"] = 14  # Slightly above
-    elif bias_ma5 >= 5:
-        breakdown["bias"] = 4   # Too far above, don't chase
-    elif -5 <= bias_ma5 < -3:
-        breakdown["bias"] = 14  # Pulling back more
+    if in_downtrend:
+        # In a downtrend, sitting below MA5 = continuing weakness, not a dip
+        if bias_ma5 is None:
+            breakdown["bias"] = 5
+        elif -3 <= bias_ma5 < 0:
+            breakdown["bias"] = 8
+        elif 0 <= bias_ma5 < 2:
+            breakdown["bias"] = 10
+        elif 2 <= bias_ma5 < 5:
+            breakdown["bias"] = 7   # dead-cat bounce overextension
+        elif bias_ma5 >= 5:
+            breakdown["bias"] = 2   # bounce far above MA5, likely to fail
+        elif -5 <= bias_ma5 < -3:
+            breakdown["bias"] = 5
+        else:
+            breakdown["bias"] = 2   # far below MA5 = falling knife
     else:
-        breakdown["bias"] = 6   # Far below
+        if bias_ma5 is None:
+            breakdown["bias"] = 10
+        elif -3 <= bias_ma5 < 0:
+            breakdown["bias"] = 20  # Slightly below MA5 = ideal dip
+        elif 0 <= bias_ma5 < 2:
+            breakdown["bias"] = 18  # Close to MA5
+        elif 2 <= bias_ma5 < 5:
+            breakdown["bias"] = 14  # Slightly above
+        elif bias_ma5 >= 5:
+            breakdown["bias"] = 4   # Too far above, don't chase
+        elif -5 <= bias_ma5 < -3:
+            breakdown["bias"] = 14  # Pulling back more
+        else:
+            breakdown["bias"] = 6   # Far below
 
-    # 3. Volume score (15 pts)
+    # 3. Volume score (15 pts) - shrink pullback only counts in an uptrend;
+    #    in a downtrend, shrink price-drop is 阴跌 (bleeding), not 回调 (pullback)
     vol_trend = vol_data.get("trend", "normal")
-    vol_scores = {
-        "shrink_pullback": 15, "heavy_volume_up": 12, "normal": 10,
-        "shrink_up": 6, "heavy_volume_down": 0, "insufficient_data": 8,
-        "unknown": 8,
-    }
+    if in_downtrend:
+        vol_scores = {
+            "shrink_pullback": 4, "heavy_volume_up": 8, "normal": 6,
+            "shrink_up": 8, "heavy_volume_down": 0, "insufficient_data": 5,
+            "unknown": 5,
+        }
+    else:
+        vol_scores = {
+            "shrink_pullback": 15, "heavy_volume_up": 12, "normal": 10,
+            "shrink_up": 6, "heavy_volume_down": 0, "insufficient_data": 8,
+            "unknown": 8,
+        }
     breakdown["volume"] = vol_scores.get(vol_trend, 8)
 
     # 4. MACD score (15 pts)
@@ -1546,15 +2059,36 @@ def calc_trend_score(ma_data: dict, macd_data: dict, rsi_data: dict,
     }
     breakdown["macd"] = macd_scores.get(macd_signal, 7)
 
-    # 5. RSI score (10 pts)
+    # 5. RSI score (10 pts) - low RSI is only "oversold opportunity" in an
+    #    uptrend; in a downtrend it just means the trend is weak (falling knife)
     rsi_zone = rsi_data.get("zone", "neutral")
-    rsi_scores = {
-        "oversold": 10, "strong": 8, "neutral": 5,
-        "weak": 3, "overbought": 0, "unknown": 5,
-    }
+    if in_downtrend:
+        rsi_scores = {
+            "oversold": 4, "strong": 6, "neutral": 5,
+            "weak": 2, "overbought": 3, "unknown": 5,
+        }
+    else:
+        rsi_scores = {
+            "oversold": 10, "strong": 8, "neutral": 5,
+            "weak": 3, "overbought": 0, "unknown": 5,
+        }
     breakdown["rsi"] = rsi_scores.get(rsi_zone, 5)
 
-    # 6. Support score (10 pts)
+    # 6. Relative Strength score (4 pts) vs benchmark (沪深300/恒指/SPY)
+    #    context["rs_60d"] = stock 60d return minus benchmark 60d return (pct)
+    rs60 = context.get("rs_60d")
+    if rs60 is None:
+        breakdown["relative_strength"] = 2  # benchmark unavailable -> neutral
+    elif rs60 >= 10:
+        breakdown["relative_strength"] = 4  # strongly leading the market
+    elif rs60 >= 0:
+        breakdown["relative_strength"] = 3  # leading
+    elif rs60 >= -5:
+        breakdown["relative_strength"] = 2  # mildly lagging
+    else:
+        breakdown["relative_strength"] = 0  # badly lagging the market
+
+    # 7. Support score (10 pts)
     sup_score = 0
     if support_data.get("support_ma5"):
         sup_score += 5
@@ -1568,10 +2102,37 @@ def calc_trend_score(ma_data: dict, macd_data: dict, rsi_data: dict,
     alignment_val = ma_data.get("alignment", "consolidation")
     bullish_alignments = ["bullish", "strong_bullish", "weak_bullish"]
 
-    if total >= 75 and alignment_val in ["bullish", "strong_bullish"]:
+    # Hard gates: downtrend phase (pullback-like patterns are continuation),
+    # poor risk/reward (rr_ratio < 1.5), limit-up (can't buy on A-shares, T+1),
+    # and large upcoming unlock (>= 5% of float within 30 days).
+    rr = context.get("rr_ratio")
+    limit_status = context.get("limit_status") or "unknown"
+    unlock_pct = context.get("unlock_pct_30d")
+
+    buy_gates = []
+    warnings = []
+    if in_downtrend:
+        buy_gates.append(f"phase={phase}: downtrend, pullback-like patterns are continuation")
+    if rr is not None and rr < 1.5:
+        buy_gates.append(f"rr_ratio={rr} < 1.5: risk/reward not justified")
+    if limit_status == "limit_up":
+        buy_gates.append("limit_up: 涨停封板，今日买入不可执行（T+1）")
+    if unlock_pct is not None and unlock_pct >= 5:
+        buy_gates.append(f"upcoming unlock {unlock_pct}% of float within 30d: 大额解禁")
+    if limit_status == "limit_down":
+        warnings.append("limit_down: 跌停，止损单今日可能无法成交")
+    elif limit_status == "near_limit_down":
+        warnings.append("near_limit_down: 接近跌停，注意止损滑点")
+    if unlock_pct is not None and 3 <= unlock_pct < 5:
+        warnings.append(f"upcoming unlock {unlock_pct}% of float within 30d")
+    buy_blocked = bool(buy_gates)
+
+    if total >= 75 and alignment_val in ["bullish", "strong_bullish"] and not buy_blocked:
         signal = "strong_buy"
-    elif total >= 60 and alignment_val in bullish_alignments:
+    elif total >= 60 and alignment_val in bullish_alignments and not buy_blocked:
         signal = "buy"
+    elif total >= 60 and alignment_val in bullish_alignments:
+        signal = "hold"  # buy-grade setup but a hard gate fired: wait for repair
     elif total >= 45:
         signal = "hold"
     elif total >= 30:
@@ -1591,6 +2152,8 @@ def calc_trend_score(ma_data: dict, macd_data: dict, rsi_data: dict,
         "breakdown": breakdown,
         "signal": signal,
         "signal_cn": signal_cn.get(signal, signal),
+        "buy_gates": buy_gates,
+        "warnings": warnings,
     }
 
 
@@ -1631,8 +2194,12 @@ def analyze_stock(code: str, days: int = 120, fetch_news: bool = False) -> dict:
     if not ohlcv or len(ohlcv) < 10:
         raise ValueError(f"Insufficient data for {code}: only {len(ohlcv)} bars")
 
-    closes = [bar["close"] for bar in ohlcv if bar["close"] is not None]
-    volumes = [bar["volume"] for bar in ohlcv if bar["volume"] is not None]
+    # 日期对齐: closes/volumes/recent_bars 必须派生自同一份有效 bar 序列。
+    # 之前分别压缩 close 与 volume 会导致指标窗口横跨非连续交易日、
+    # 且指标与 recent_bars 的日期错位。
+    valid_bars = [b for b in ohlcv if b.get("close") is not None]
+    closes = [b["close"] for b in valid_bars]
+    volumes = [b.get("volume") for b in valid_bars]
 
     if len(closes) < 10:
         raise ValueError(f"Insufficient valid close prices for {code}")
@@ -1644,13 +2211,41 @@ def analyze_stock(code: str, days: int = 120, fetch_news: bool = False) -> dict:
     vol = calc_volume_analysis(volumes, closes)
     bias = calc_bias(closes, ma)
     support = calc_support(closes, ma)
-    score = calc_trend_score(ma, macd, rsi, vol, bias, support)
+    # Phase/position context: separates uptrend pullback from downtrend decline,
+    # so "rallied recently then pulled back" is NOT auto-labeled oversold
+    context = calc_pullback_context(closes, ma)
+    # Volatility-aware stop/target with R:R (ATR-based, feeds buy gate)
+    risk = calc_risk_levels(valid_bars, closes, ma)
+    # A股微观结构: 涨跌停状态（影响买入可执行性）+ 临近解禁事件（best-effort）
+    tradability = calc_tradability(raw.get("realtime", {}), normalized, raw.get("name", ""))
+    unlocks = fetch_upcoming_unlocks(normalized, 60) if market == "cn_a" else []
+    unlock_pct_30d = None
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    horizon30 = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
+    for u in unlocks:
+        if today_str <= u["date"] <= horizon30 and u.get("pct_of_float") is not None:
+            unlock_pct_30d = max(unlock_pct_30d or 0.0, u["pct_of_float"])
+    # Relative strength vs market benchmark (non-fatal if benchmark unavailable)
+    try:
+        bench = _benchmark_closes(market)
+    except Exception as e:
+        _log(f"[{code}] benchmark fetch failed: {e}")
+        bench = None
+    rs = calc_relative_strength(market, closes, bench)
+    # Feed RS, R:R, tradability, unlocks into scoring context (buy gates)
+    context["rs_60d"] = rs.get("rs_60d")
+    context["rr_ratio"] = risk.get("rr_ratio")
+    context["limit_status"] = tradability.get("limit_status")
+    context["unlock_pct_30d"] = unlock_pct_30d
+    score = calc_trend_score(ma, macd, rsi, vol, bias, support, context)
 
-    # News search (optional)
+    # News search (optional) — structured: dates + time-decayed sentiment
     news = []
+    news_summary = None
     if fetch_news:
         stock_name = raw.get("name", display)
         news = search_news(stock_name, display, market=market)
+        news_summary = analyze_news_sentiment(news)
 
     result = {
         "code": display,
@@ -1666,15 +2261,368 @@ def analyze_stock(code: str, days: int = 120, fetch_news: bool = False) -> dict:
             "volume": vol,
             "bias": bias,
             "support": support,
+            "context": context,
+            "risk": risk,
+            "relative_strength": rs,
+            "tradability": tradability,
         },
+        "events": {"upcoming_unlocks": unlocks, "unlock_pct_30d": unlock_pct_30d},
         "trend_score": score,
-        "recent_bars": ohlcv[-10:],
+        "recent_bars": valid_bars[-10:],  # 与指标输入同一序列，日期严格对齐
+        "as_of": valid_bars[-1].get("date"),  # 指标计算截止日
+        "adjustment": raw.get("adjustment", "unknown"),
         "total_bars": len(ohlcv),
         "fetch_time": datetime.now().isoformat(),
     }
     if news:
         result["news"] = news
+    if news_summary is not None:
+        result["news_summary"] = news_summary
     return result
+
+
+# ============================================================
+# SECTION 6: Backtesting Framework (P3 - Score Validation & Calibration)
+# ============================================================
+
+_MIN_BARS_FOR_INDICATORS = 61
+_SCORE_BUCKETS = [(0, 30, "0-30"), (30, 45, "30-45"), (45, 60, "45-60"),
+                  (60, 75, "60-75"), (75, 200, "75+")]
+
+
+def _forward_return(closes: list, idx: int, n: int):
+    """Forward n-bar return from index idx (pct). None if insufficient future data."""
+    if idx + n >= len(closes) or not closes[idx] or closes[idx] <= 0:
+        return None
+    future = closes[idx + n]
+    return round((future / closes[idx] - 1) * 100, 4) if future else None
+
+
+def _calc_rs_simple(stock_closes: list, bench_closes: list = None) -> dict:
+    """Simplified RS for backtesting — returns shape calc_trend_score expects."""
+    out = {"benchmark": "none", "rs_60d": None, "rs_20d": None}
+    if not bench_closes or len(bench_closes) < 61:
+        return out
+    def ret(vals, n):
+        if len(vals) > n and vals[-n - 1] and vals[-n - 1] > 0:
+            return (vals[-1] / vals[-n - 1] - 1) * 100
+        return None
+    sr20, sr60 = ret(stock_closes, 20), ret(stock_closes, 60)
+    br20, br60 = ret(bench_closes, 20), ret(bench_closes, 60)
+    if sr20 is not None and br20 is not None:
+        out["rs_20d"] = round(sr20 - br20, 2)
+    if sr60 is not None and br60 is not None:
+        out["rs_60d"] = round(sr60 - br60, 2)
+    return out
+
+
+def compute_signal_from_ohlcv(bars: list, benchmark_closes: list = None):
+    """
+    Compute signal from OHLCV bars only (no external data fetching).
+    Used for backtesting where we walk through historical data.
+    Returns dict with signal info, or None if insufficient data.
+    """
+    valid_bars = [b for b in bars if b.get("close") is not None]
+    if len(valid_bars) < _MIN_BARS_FOR_INDICATORS:
+        return None
+
+    closes = [b["close"] for b in valid_bars]
+    volumes = [b.get("volume") for b in valid_bars]
+
+    ma = calc_ma(closes, [5, 10, 20, 60])
+    macd_data = calc_macd(closes)
+    rsi_data = calc_rsi(closes, [6, 12, 24])
+    vol_data = calc_volume_analysis(volumes, closes)
+    bias_data = calc_bias(closes, ma)
+    support_data = calc_support(closes, ma)
+    context = calc_pullback_context(closes, ma)
+    risk = calc_risk_levels(valid_bars, closes, ma)
+    rs_data = _calc_rs_simple(closes, benchmark_closes)
+
+    # Feed RS and R:R into context (same pattern as analyze_stock)
+    context["rs_60d"] = rs_data.get("rs_60d")
+    context["rr_ratio"] = risk.get("rr_ratio")
+
+    return calc_trend_score(ma, macd_data, rsi_data, vol_data, bias_data,
+                            support_data, context)
+
+
+def backtest_stock(code: str, days: int = 252, forward_days: list = None,
+                   ohlcv_data: list = None, bench_closes: list = None) -> dict:
+    """
+    Walk through historical data day-by-day, generate signals at each point,
+    and track forward returns for calibration.
+    """
+    if forward_days is None:
+        forward_days = [5, 10, 20]
+
+    if ohlcv_data is None:
+        market, normalized, display = classify_stock(code)
+        total_days = days + max(forward_days) + 10
+        if market == "cn_a":
+            raw = fetch_cn_a(normalized, total_days)
+        elif market == "cn_hk":
+            raw = fetch_hk(normalized, total_days)
+        elif market == "us":
+            raw = fetch_us(normalized, total_days)
+        else:
+            return {"code": code, "error": f"unknown_market: {market}"}
+        ohlcv_data = raw.get("ohlcv", [])
+
+    if len(ohlcv_data) < _MIN_BARS_FOR_INDICATORS + max(forward_days):
+        return {"code": code, "error": "insufficient_data",
+                "total_bars": len(ohlcv_data)}
+
+    start_idx = _MIN_BARS_FOR_INDICATORS
+    end_idx = len(ohlcv_data) - max(forward_days)
+    all_closes = [b["close"] for b in ohlcv_data]
+
+    signals = []
+    for i in range(start_idx, end_idx):
+        window = ohlcv_data[:i + 1]
+        score = compute_signal_from_ohlcv(window, bench_closes)
+        if score is None:
+            continue
+
+        closes = [b["close"] for b in window if b.get("close") is not None]
+        if not closes:
+            continue
+
+        fwd_returns = {}
+        for fd in forward_days:
+            fr = _forward_return(all_closes, i, fd)
+            if fr is not None:
+                fwd_returns[f"{fd}d"] = fr
+
+        signals.append({
+            "date": ohlcv_data[i].get("date", f"idx_{i}"),
+            "score_total": score["total"],
+            "signal": score["signal"],
+            "breakdown": score["breakdown"],
+            "entry_price": closes[-1],
+            "forward_returns": fwd_returns,
+        })
+
+    calib = _aggregate_calibration(signals, forward_days)
+    calib["code"] = code
+    calib["total_signals"] = len(signals)
+    calib["lookback_bars"] = _MIN_BARS_FOR_INDICATORS
+    calib["forward_days"] = forward_days
+    return calib
+
+
+def _pearson(xs, ys):
+    """Pearson correlation coefficient."""
+    n = len(xs)
+    if n < 3:
+        return None
+    mx, my = sum(xs) / n, sum(ys) / n
+    num = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    dx = sum((x - mx) ** 2 for x in xs) ** 0.5
+    dy = sum((y - my) ** 2 for y in ys) ** 0.5
+    return round(num / (dx * dy), 4) if dx > 0 and dy > 0 else None
+
+
+def _aggregate_calibration(signals: list, forward_days: list) -> dict:
+    """Aggregate signals into calibration statistics."""
+    if not signals:
+        return {"error": "no_signals_generated"}
+
+    # By signal type
+    by_signal = {}
+    for sig in signals:
+        by_signal.setdefault(sig["signal"], []).append(sig)
+
+    signal_stats = {}
+    for signal_type, sigs in by_signal.items():
+        stats = {"count": len(sigs)}
+        for fd in forward_days:
+            rets = [s["forward_returns"].get(f"{fd}d") for s in sigs
+                    if s["forward_returns"].get(f"{fd}d") is not None]
+            if rets:
+                stats[f"fwd_{fd}d"] = {
+                    "mean": round(sum(rets) / len(rets), 2),
+                    "median": round(sorted(rets)[len(rets) // 2], 2),
+                    "win_rate": round(sum(1 for r in rets if r > 0) / len(rets) * 100, 1),
+                    "count": len(rets),
+                }
+        signal_stats[signal_type] = stats
+
+    # By score bucket
+    by_bucket = {}
+    for sig in signals:
+        total = sig["score_total"]
+        bucket = next((b[2] for b in _SCORE_BUCKETS if b[0] <= total < b[1]), "unknown")
+        by_bucket.setdefault(bucket, []).append(sig)
+
+    bucket_stats = {}
+    for bucket_name, sigs in by_bucket.items():
+        stats = {"count": len(sigs)}
+        for fd in forward_days:
+            rets = [s["forward_returns"].get(f"{fd}d") for s in sigs
+                    if s["forward_returns"].get(f"{fd}d") is not None]
+            if rets:
+                stats[f"fwd_{fd}d"] = {
+                    "mean": round(sum(rets) / len(rets), 2),
+                    "median": round(sorted(rets)[len(rets) // 2], 2),
+                    "win_rate": round(sum(1 for r in rets if r > 0) / len(rets) * 100, 1),
+                    "count": len(rets),
+                }
+        bucket_stats[bucket_name] = stats
+
+    # Score-return correlation
+    correlations = {}
+    for fd in forward_days:
+        pairs = [(s["score_total"], s["forward_returns"][f"{fd}d"])
+                 for s in signals if s["forward_returns"].get(f"{fd}d") is not None]
+        corr = _pearson([p[0] for p in pairs], [p[1] for p in pairs])
+        if corr is not None:
+            correlations[f"score_vs_{fd}d"] = corr
+
+    # Component analysis
+    component_corr = _component_correlation(signals, forward_days)
+
+    return {
+        "by_signal": signal_stats,
+        "by_bucket": bucket_stats,
+        "correlations": correlations,
+        "component_correlations": component_corr,
+    }
+
+
+def _component_correlation(signals: list, forward_days: list) -> dict:
+    """Which score components predict forward returns? Drives weight calibration."""
+    components = ["trend", "bias", "volume", "macd", "rsi", "relative_strength", "support"]
+    result = {}
+
+    for comp in components:
+        for fd in forward_days:
+            pairs = [(s["breakdown"].get(comp, 0), s["forward_returns"][f"{fd}d"])
+                     for s in signals
+                     if s["breakdown"].get(comp) is not None
+                     and s["forward_returns"].get(f"{fd}d") is not None]
+            if len(pairs) < 3:
+                continue
+            corr = _pearson([p[0] for p in pairs], [p[1] for p in pairs])
+            if corr is not None:
+                result[f"{comp}_vs_{fd}d"] = corr
+
+    sorted_comps = sorted(
+        [(k, v) for k, v in result.items() if k.endswith("_vs_20d")],
+        key=lambda x: abs(x[1]), reverse=True
+    )
+    result["ranked_for_20d"] = [{k: v} for k, v in sorted_comps]
+    return result
+
+
+def backtest_report(calib: dict) -> str:
+    """Human-readable calibration report."""
+    if "error" in calib:
+        return f"Backtest error: {calib['error']}"
+
+    lines = []
+    lines.append(f"=== Backtest Calibration Report: {calib['code']} ===")
+    lines.append(f"Total signals: {calib['total_signals']} | "
+                 f"Lookback: {calib['lookback_bars']} bars | "
+                 f"Forward horizons: {calib['forward_days']}d")
+    lines.append("")
+
+    lines.append("--- Score-Return Correlation ---")
+    for k, v in calib["correlations"].items():
+        lines.append(f"  {k}: {v}")
+    lines.append("")
+
+    lines.append("--- Forward Returns by Signal Type ---")
+    for sig_type, stats in calib["by_signal"].items():
+        lines.append(f"  {sig_type} (n={stats['count']}):")
+        for fd in calib["forward_days"]:
+            key = f"fwd_{fd}d"
+            if key in stats:
+                s = stats[key]
+                lines.append(f"    {fd}d: mean={s['mean']}% median={s['median']}% "
+                             f"win={s['win_rate']}% (n={s['count']})")
+    lines.append("")
+
+    lines.append("--- Forward Returns by Score Bucket ---")
+    for bucket, stats in calib["by_bucket"].items():
+        lines.append(f"  {bucket} (n={stats['count']}):")
+        for fd in calib["forward_days"]:
+            key = f"fwd_{fd}d"
+            if key in stats:
+                s = stats[key]
+                lines.append(f"    {fd}d: mean={s['mean']}% median={s['median']}% "
+                             f"win={s['win_rate']}% (n={s['count']})")
+    lines.append("")
+
+    lines.append("--- Component Correlation with 20d Forward Return ---")
+    for item in calib["component_correlations"].get("ranked_for_20d", []):
+        for comp, corr in item.items():
+            lines.append(f"  {comp}: {corr}")
+    lines.append("")
+
+    lines.append("--- Calibration Suggestions ---")
+    for s in _generate_calibration_suggestions(calib):
+        lines.append(f"  - {s}")
+
+    return "\n".join(lines)
+
+
+def _generate_calibration_suggestions(calib: dict) -> list:
+    """Actionable suggestions based on calibration results."""
+    suggestions = []
+    corrs = calib.get("correlations", {})
+    score_corr = corrs.get("score_vs_20d")
+
+    if score_corr is not None:
+        if score_corr < 0.1:
+            suggestions.append(
+                f"Score-20d correlation is weak ({score_corr}). "
+                "Current scoring system has low predictive power. "
+                "Consider reweighting based on component correlations.")
+        elif score_corr < 0.3:
+            suggestions.append(
+                f"Score-20d correlation is moderate ({score_corr}). "
+                "System has some predictive power but room for improvement.")
+        else:
+            suggestions.append(
+                f"Score-20d correlation is strong ({score_corr}). "
+                "Scoring system is well-calibrated.")
+
+    # Monotonicity check
+    buckets = calib.get("by_bucket", {})
+    prev_mean, monotonic = None, True
+    for bn in ["0-30", "30-45", "45-60", "60-75", "75+"]:
+        if bn in buckets:
+            m = buckets[bn].get("fwd_20d", {}).get("mean")
+            if m is not None:
+                if prev_mean is not None and m < prev_mean:
+                    monotonic = False
+                prev_mean = m
+    if not monotonic:
+        suggestions.append(
+            "Score buckets are NOT monotonically increasing in forward returns. "
+            "Thresholds may need adjustment or weights recalibrated.")
+
+    # Component-based suggestions
+    ranked = calib.get("component_correlations", {}).get("ranked_for_20d", [])
+    if ranked:
+        top = list(ranked[0].items())[0]
+        bottom = list(ranked[-1].items())[0]
+        suggestions.append(
+            f"Strongest predictor: {top[0]} (corr={top[1]}) — consider increasing its weight.")
+        suggestions.append(
+            f"Weakest predictor: {bottom[0]} (corr={bottom[1]}) — consider decreasing its weight.")
+
+    # Buy/sell asymmetry
+    by_sig = calib.get("by_signal", {})
+    buy_rets = by_sig.get("buy", {}).get("fwd_20d", {}).get("mean")
+    sell_rets = by_sig.get("sell", {}).get("fwd_20d", {}).get("mean")
+    if buy_rets is not None and sell_rets is not None and buy_rets < sell_rets:
+        suggestions.append(
+            f"Buy signals underperform sell signals ({buy_rets}% vs {sell_rets}% 20d). "
+            "Buy thresholds may be too loose or buy logic flawed.")
+
+    return suggestions
 
 
 def main():
@@ -1682,6 +2630,9 @@ def main():
     parser.add_argument("--stocks", required=True, help="Comma-separated stock codes")
     parser.add_argument("--days", type=int, default=120, help="History trading days")
     parser.add_argument("--news", action="store_true", help="Also search news (A股 via akshare/东方财富 free; HK/US needs TAVILY_API_KEY or SERPAPI_KEY)")
+    parser.add_argument("--backtest", action="store_true", help="Run backtest calibration (walks through historical data, generates signals, tracks forward returns)")
+    parser.add_argument("--backtest-days", type=int, default=252, help="Backtest lookback window in trading days (default 252)")
+    parser.add_argument("--forward-days", type=str, default="5,10,20", help="Forward return horizons in trading days (comma-separated)")
     args = parser.parse_args()
 
     codes = [c.strip() for c in args.stocks.split(",") if c.strip()]
@@ -1704,6 +2655,33 @@ def main():
               else ("serpapi" if os.environ.get("SERPAPI_KEY") else "none"))
     )
     _log(f"Data sources: {json.dumps(sources_status)}")
+
+    # Backtest mode
+    if args.backtest:
+        forward_days = [int(x.strip()) for x in args.forward_days.split(",") if x.strip()]
+        backtest_results = []
+        for code in codes:
+            try:
+                _log(f"[backtest] Running calibration for {code}...")
+                calib = backtest_stock(code, days=args.backtest_days,
+                                       forward_days=forward_days)
+                backtest_results.append(calib)
+                # Print report to stderr for visibility
+                _log(f"\n{backtest_report(calib)}")
+            except Exception as e:
+                errors.append({"code": code, "error": str(e), "type": type(e).__name__})
+
+        output = {
+            "analysis_date": datetime.now().strftime("%Y-%m-%d"),
+            "mode": "backtest",
+            "forward_days": forward_days,
+            "stocks": backtest_results,
+            "errors": errors,
+            "total_requested": len(codes),
+            "total_success": len(backtest_results),
+        }
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return
 
     for code in codes:
         try:

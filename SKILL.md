@@ -107,6 +107,8 @@ pip3 install akshare yfinance efinance --quiet && python3 /tmp/stock_data_fetche
 ```
 
 5. 脚本输出 JSON，包含：每只股票的实时行情、技术指标、综合评分、使用的数据源、新闻（如有API Key）
+   - `adjustment` 字段标注行情复权口径（全链路统一为 qfq 前复权）
+   - `as_of` 字段为技术指标计算的截止交易日（分析结论以此日期为准）
 6. 输出中的 `data_sources` 字段会显示各数据源的可用状态，方便诊断
 
 ## STEP 2.5: MCP 数据增强（可选，已配置 hithink-finance-* MCP 时）
@@ -153,15 +155,20 @@ file_read("references/analysis-prompt-template.md")
 ```
 
 2. 按照框架，对每只股票进行综合分析：
-   - 技术面权重 60%：看 MA 排列、MACD 信号、RSI 区间、量能状态、乖离率
-   - 消息面权重 30%：新闻情绪与技术面交叉验证
+   - 先看阶段/位置（indicators.context）：区分「上升趋势回调 uptrend_pullback」「下跌趋势阴跌 downtrend_decline」「区间震荡 range_swing」——所有回调/超卖解读都必须先过这个前提
+   - 技术面权重 60%：看 MA 排列、MACD 信号、RSI 区间、量能状态、乖离率、相对强度
+   - 消息面权重 30%：以脚本 news_summary（时间衰减情绪分、事件类型、重大风险标记）为基准做交叉验证，不要凭印象给新闻打分
    - 宏观权重 10%：市场整体环境
 
 3. 硬性规则（必须遵守）：
    - RSI > 80 → 绝不给买入信号
    - 乖离率 MA5 > 5% → 绝不给买入信号（不追高）
+   - 阶段为 downtrend_decline → 绝不给买入信号：下跌趋势中"涨过一波然后回落"是趋势延续，不是超卖；只有 uptrend_pullback（MA60 上方 + 多头排列 + 浅幅回落）中低 RSI 才算超卖机会
+   - 缩量回调只在 uptrend_pullback 阶段是好买点；下跌趋势里同样的形态是缩量阴跌
+   - 盈亏比 risk.rr_ratio < 1.5 → 脚本已硬性拦截买入信号；止损/目标价必须取自 indicators.risk（stop_suggested / target_suggested，ATR 波动率自适应），不得自行编造价格
+   - 相对强度（rs_60d，对比沪深300/恒指/SPY）落后 5 个百分点以上 → 需显著更强的技术面才可给买入信号
+   - A股执行约束：涨停封板（脚本已拦截买入，T+1 买不进）、30日内解禁 ≥5% 流通盘（脚本已拦截）；跌停/3-5% 解禁以 warnings 提示，必须写入报告
    - 必须给精确的止损价和目标价
-   - 偏好缩量回调买点
 
 ## STEP 5: 输出决策看板
 
@@ -174,6 +181,39 @@ file_read("references/output-format-template.md")
    - 汇总表头（N只股票，买入/持有/卖出各几只）
    - 每只股票一张卡片（技术指标 + AI判断 + 价格目标 + 新闻）
    - 免责声明
+
+## STEP 6: 回测校准（可选，验证评分体系）
+
+当需要验证评分体系的有效性时，可以运行回测模式：
+
+```bash
+python3 /tmp/stock_data_fetcher.py --stocks "CODE1,CODE2" --backtest --backtest-days 252 --forward-days 5,10,20
+```
+
+### 回测原理
+- 逐日遍历历史数据（默认 252 个交易日，约一年）
+- 在每个交易日，仅使用该日之前的数据计算指标并生成信号
+- 记录信号后 5/10/20 个交易日的实际收益
+- 统计信号类型/分数区间与实际收益的关系
+
+### 输出内容
+1. **Score-Return Correlation**：评分与未来收益的相关系数（理想应为正且 >0.1）
+2. **Forward Returns by Signal Type**：各信号类型的实际收益表现
+3. **Forward Returns by Score Bucket**：各分数区间的实际收益表现
+4. **Component Correlation**：各指标组件与未来收益的相关性排名
+5. **Calibration Suggestions**：基于数据的调参建议
+
+### 校准指标解读
+| 指标 | 健康值 | 含义 |
+|------|--------|------|
+| score_vs_20d | > 0.1 | 评分对未来20日收益的预测能力 |
+| 分数区间单调性 | 单调递增 | 高分应比低分有更好的收益 |
+| buy vs sell 收益 | buy > sell | 买入信号应优于卖出信号 |
+
+### 校准建议
+- 如果评分预测力弱（correlation < 0.1），根据组件相关性重新分配权重
+- 如果分数区间不单调，调整信号阈值（当前 75/60/45/30）
+- 如果买入信号不如卖出信号，收紧买入条件或加强闸门
 
 ## 错误处理
 
