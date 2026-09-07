@@ -1,6 +1,6 @@
 # 📊 Stock Analysis Skill for Ai Coding
 
-> An AI Coding Skill plugin that generates professional-grade decision dashboards from stock tickers. Supports A-shares, HK stocks, and US stocks.
+> An Agent Skill plugin that generates professional-grade decision dashboards from stock tickers. Supports A-shares, HK stocks, and US stocks.
 
 ![Python](https://img.shields.io/badge/Python-3.9+-blue?logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green)
@@ -25,7 +25,7 @@
 Clone this project to Ai Coding's skills directory:
 
 ```bash
-git clone https://github.com/wwilson414/skill-stockAnalysis.git ~/.claude/skills/stock-analysis
+git clone https://github.com/wwilson414/skill-stockAnalysis.git ~/.agent/skills/stock-analysis
 ```
 
 Python dependencies will be auto-installed on first run:
@@ -36,7 +36,7 @@ pip3 install akshare yfinance
 
 ### Usage
 
-Enter directly in Ai Coding:
+Enter directly in the Agent:
 
 ```text
 /stock-analysis TSLA
@@ -45,7 +45,7 @@ Enter directly in Ai Coding:
 /stock-analysis HK00700
 ```
 
-Or use natural language:
+Or use natural language in the Agent:
 
 ```text
 Analyze TSLA for me

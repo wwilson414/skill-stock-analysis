@@ -63,7 +63,7 @@ User input (stock ticker/name)
 ### Processing Logic
 - Multiple stocks separated by commas, spaces, or newlines
 - If user inputs Chinese company name (e.g., "Kweichow Moutai"): When `HITHINK_FINANCE_API_KEY` is configured, the script uses THS official ticker search to auto-parse; otherwise use WebSearch first to find the corresponding ticker
-- Credential passing strategy: Key uses unified variable `HITHINK_FINANCE_API_KEY` (shared by REST/MCP/CLI/Python). If the running client (e.g., Claude Desktop) does not inherit user-level environment variables, the Agent should write the Key from the configured unified credential source to the client's Secret/credential function, **without requiring user to re-provide**; when the client does not support environment variable interpolation, use its built-in Secret/credential storage
+- Credential passing strategy: Key uses unified variable `HITHINK_FINANCE_API_KEY` (shared by REST/MCP/CLI/Python). If the running client (e.g., Claude Desktop, Cursor, or another AI coding agent) does not inherit user-level environment variables, the Agent should write the Key from the configured unified credential source to the client's Secret/credential function, **without requiring user to re-provide**; when the client does not support environment variable interpolation, use its built-in Secret/credential storage
 - Remove possible suffixes (.SH/.SZ/.SS) or prefixes (SH/SZ)
 
 ## Data Source Configuration (Optional, Enhanced Data Quality)
@@ -82,7 +82,7 @@ The script supports **graceful degradation strategy**, works with zero configura
 - HK: efinance -> akshare -> Tencent Finance -> yfinance
 - US: Tencent Finance (primary, stable domestic connection) -> yfinance
 
-**News degradation chain**: Tavily -> SerpAPI -> Claude WebSearch (fallback)
+**News degradation chain**: Tavily -> SerpAPI -> WebSearch (agent-provided fallback)
 
 ## STEP 2: Run Data Script
 
@@ -131,7 +131,7 @@ The script handles **technical analysis** (quotes + indicators + scores, complet
 
 A-share stocks:
 - First check `stock_data_fetcher.py --stocks "600519" --news` (use `--news` parameter)
-- Script degradation chain: akshare East Money (free) -> Tavily -> SerpAPI (Google News) -> Claude WebSearch
+- Script degradation chain: akshare East Money (free) -> Tavily -> SerpAPI (Google News) -> WebSearch (agent-provided fallback)
   - SerpAPI uses **Google News** search engine, query `"{stock_name} {ticker} stock news OR earnings OR announcement"`, returns Google News results
 - If `news` array already exists in JSON, use it directly
 - If script returns empty (no available news/network failure), execute WebSearch:
@@ -210,6 +210,68 @@ python3 /tmp/stock_data_fetcher.py --stocks "CODE1,CODE2" --backtest --backtest-
 - If score prediction is weak (correlation < 0.1), reallocate weights based on component correlation
 - If score ranges are not monotonic, adjust signal thresholds (currently 75/60/45/30)
 - If buy signals underperform sell signals, tighten buy conditions or strengthen gates
+
+### Weight Calibration (--calibrate, reweight scoring from backtest ICs)
+
+```bash
+python3 /tmp/stock_data_fetcher.py --stocks "CODE1,CODE2" --backtest --calibrate --backtest-days 252
+```
+
+- On top of a backtest, `--calibrate` derives suggested per-component budgets from each
+  component's **IC** (correlation with the 20d forward return).
+- Mapping: `m_i = 1 + tanh(IC_i * 8) * 0.5` (soft, bounded [0.5, 1.5]); then
+  `budget_i = round(100 * default_i * m_i / SUM(default_j * m_j))`. Rounding drift is
+  added to the largest component so the 7 budgets sum to exactly 100.
+- Output: a `calibration` object in the JSON `(weights / delta / ics / score_vs_20d /
+  n_stocks / method / note)` plus a comparison table on stderr
+  `(component / default / suggested / delta / IC)`.
+- Guardrail: when the IC signal is too weak (total |IC| < 0.15 across 7 components, or no
+  calibration data), it conservatively returns the default weights with a note, to avoid
+  chasing noise.
+- Anti-predictive guardrail: when nearly all component ICs are **negative** (score inversely
+  correlated with forward returns in-sample), recalibration is refused with a note — weight
+  tuning cannot fix a sign problem. Investigate the regime (mean-reverting window?), buy/sell
+  thresholds, or scoring logic instead.
+- Usage advice: run `--backtest --calibrate` over several stocks from different sectors to
+  pool ICs; adopt the suggestions only after human review, then pass them via
+  `calc_trend_score(..., weights={...})` or bake them into `_DEFAULT_WEIGHTS` in
+  `stock_data_fetcher.py`.
+
+### A/B Validation (--ab-test, do suggested weights actually help?)
+
+```bash
+python3 /tmp/stock_data_fetcher.py --stocks "CODE1,CODE2" --backtest --calibrate --ab-test
+```
+
+- After calibration, re-runs the backtest for each stock with **(a) default weights** and
+  **(b) suggested weights** on **identical fetched data** (same OHLCV + benchmark per stock,
+  no data-cherry-picking between runs), then compares `score_vs_20d` IC and buy/sell 20d
+  mean returns.
+- Output: an `ab_test` object in the JSON (`weight_sets / per_stock / aggregate`) plus a
+  comparison table on stderr.
+- Decision rule: adopt suggested weights **only if** aggregate `avg_score_vs` clearly
+  improves (e.g. > +0.05 vs default). In our cross-market test (600519/000001/300750/TSLA/
+  AAPL, 2025-2026 window) suggested ≈ default (IC −0.2055 vs −0.2084) with all ICs negative —
+  evidence the issue is regime/threshold-level, not weight-level. Do **not** bake weights
+  from an anti-predictive sample.
+
+### Regime-Segmented IC (by_phase / phase_analysis)
+
+Every backtest signal records the market regime it was generated in
+(`uptrend_pullback` / `downtrend_decline` / `range_swing`, from `calc_pullback_context`).
+Backtest output includes:
+
+- per-stock `by_phase`: count, forward-return stats, and per-horizon score-return IC
+  for each regime (also shown in the stderr report under "By Market Regime (Phase)");
+- cross-stock `phase_analysis`: count-weighted pooled IC and 20d mean return per regime.
+
+Pooled ICs hide regime inversion — a momentum score can be positive-IC in uptrends and
+negative-IC in downtrends while the average looks flat. In our cross-market test the
+overall negative IC (−0.21) is driven almost entirely by `downtrend_decline`
+(n=520, ic=−0.19, where high-scoring "bounce candidates" keep falling); outside
+downtrends the IC is weakly positive (~+0.03). Interpretation: the phase-aware buy gate
+(downtrend blocks buy) is the right mitigation, and a separate mean-reversion signal
+would be needed to trade downtrend bounces — the current score cannot rank them.
 
 ## Error Handling
 | Scenario | Handling |

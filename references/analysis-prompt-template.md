@@ -70,6 +70,12 @@ Analyze the provided technical data + news objectively. Give clear, actionable j
    (can't fill, T+1) and on large unlocks (>=5% float within 30d); surface
    `warnings` (limit-down stop-loss may not fill, 3-5% unlocks) in the report
 9. **Confidence = High only when** score >= 70 AND news confirms AND no major risk
+10. **Scoring weights are data-driven, not sacred** - component budgets live in
+    `_DEFAULT_WEIGHTS` and can be recalibrated from backtest ICs via
+    `--backtest --calibrate` (see SKILL.md STEP 6). If a `calibration` object is
+    attached to the backtest output, reflect the relative component strength in your
+    weighting of the *breakdown* when judging, and flag any proposal to adopt a
+    different weight set for human sign-off before relying on it.
 
 ## Signal Decision Matrix
 

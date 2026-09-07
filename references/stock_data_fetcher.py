@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Stock Data Fetcher + Technical Indicator Calculator
-Outputs structured JSON for Claude Code analysis.
+Outputs structured JSON for downstream AI agents / analysis pipelines.
 No AI/LLM calls -- pure data + math.
 
 Adjustment standard: All data sources in the degradation chain use forward-adjusted (qfq) prices, see _SOURCE_ADJUSTMENT comments for details.
@@ -13,8 +13,8 @@ Data source priority (graceful degradation):
   US:      Tencent Finance > yfinance
 
 News search priority (via --news flag):
-  A-share:   akshare East Moneyindividual stock news (free, no key) > Tavily > SerpAPI > skip (use WebSearch in Claude)
-  HK/US: Tavily (if TAVILY_API_KEY set) > SerpAPI (if SERPAPI_KEY set) > skip (use WebSearch in Claude)
+  A-share:   akshare East Moneyindividual stock news (free, no key) > Tavily > SerpAPI > skip (use WebSearch in Agent)
+  HK/US: Tavily (if TAVILY_API_KEY set) > SerpAPI (if SERPAPI_KEY set) > skip (use WebSearch in Agent)
 
 Usage:
     python3 stock_data_fetcher.py --stocks "600519,TSLA,HK00700" [--days 120] [--news]
@@ -1249,8 +1249,8 @@ def search_news(stock_name: str, code: str, max_results: int = 5, market: str = 
         except Exception as e:
             _log(f"[{code}] SerpAPI failed: {e}")
 
-    # No news source available - return empty, let Claude use WebSearch
-    _log(f"[{code}] No news source available, skipping (Claude will use WebSearch)")
+    # No news source available - return empty, let Agent use WebSearch
+    _log(f"[{code}] No news source available, skipping (Agent will use WebSearch)")
     return []
 
 
@@ -1964,9 +1964,31 @@ def calc_support(closes: list, ma_data: dict) -> dict:
 # SECTION 4: Composite Trend Scoring (100 points)
 # ============================================================
 
+# Default per-component point budgets (must sum to 100).
+# These are the "max points" a component can contribute. When
+# `weights` is passed to calc_trend_score, each component's score
+# table it scaled by new_budget/default_budget, keeping total ≤ 100.
+_DEFAULT_WEIGHTS = {
+    "trend":              26,  # MA alignment
+    "bias":              20,   # bias ratio
+    "volume":             15,   # volume pattern
+    "macd":               15,   # MACD signal
+    "rsi":               10,  # RSI zone
+    "relative_strength":  4,  # vs benchmark (CSI300/HSI/SPY)
+    "support":             10,  # MA5/MA10 support proximity
+}
+
+
+def _scale_table(table: dict, factor: float) -> dict:
+    """Scale a component score table by `factor` (1.0 = no-op), keeping 1-decimal precision."""
+    if factor is None or abs(factor - 1.0) < 1e-9:
+        return table
+    return {k: round(v * factor, 1) for k, v in table.items()}
+
+
 def calc_trend_score(ma_data: dict, macd_data: dict, rsi_data: dict,
                      vol_data: dict, bias_data: dict, support_data: dict,
-                     context: dict = None) -> dict:
+                     context: dict = None, weights: dict = None) -> dict:
     """
     Composite scoring system (100 points total):
     - Trend/MA alignment: 26 pts
@@ -1983,12 +2005,24 @@ def calc_trend_score(ma_data: dict, macd_data: dict, rsi_data: dict,
 
     Buy gates (hard): downtrend_decline phase, or risk/reward ratio < 1.5
     (context["rr_ratio"], from calc_risk_levels) — blocked from buy signals.
+
+    weights (optional): dict of per-component point budgets used to rescale
+    achieved scores by new_budget/default_budget. None/{} keeps the default
+    budgets exactly, so existing callers are unaffected.
     """
     breakdown = {}
     context = context or {}
     phase = context.get("phase", "range_swing")
     in_downtrend = phase == "downtrend_decline"
 
+# Weight calibration (optional): merge passed-in weights over defaults,
+    # then each component's achieved score is scaled by new_budget/default_budget
+    # at the end. When weights is None/empty, every factor is exactly 1.0,
+    # so scoring ist identical to the hard-coded defaults (backward compatible).
+    _w = dict(_DEFAULT_WEIGHTS)
+    if weights:
+        _w.update({k: v for k, v in weights.items() if v is not None and v > 0})
+    _k = {comp: _w[comp] / _DEFAULT_WEIGHTS[comp] for comp in _DEFAULT_WEIGHTS}
     # 1. Trend score (26 pts)
     alignment = ma_data.get("alignment_detail", "consolidation")
     trend_scores = {
@@ -2096,6 +2130,14 @@ def calc_trend_score(ma_data: dict, macd_data: dict, rsi_data: dict,
         sup_score += 5
     breakdown["support"] = sup_score
 
+    # Weight calibration: scale each component's achieved score by its
+    # calibrated factor (equiv. to rescaling the per-state score tables,
+    # but without touching branch logic). With default weights every factor
+    # is exactly 1.0, so scoring is bit-identical to before.
+
+    for _comp in ("trend", "bias", "volume", "macd", "rsi", "relative_strength", "support"):
+        if _comp in breakdown:
+            breakdown[_comp] = round(breakdown[_comp] * _k[_comp], 1)
     total = sum(breakdown.values())
 
     # Signal generation
@@ -2316,10 +2358,13 @@ def _calc_rs_simple(stock_closes: list, bench_closes: list = None) -> dict:
     return out
 
 
-def compute_signal_from_ohlcv(bars: list, benchmark_closes: list = None):
+def compute_signal_from_ohlcv(bars: list, benchmark_closes: list = None,
+                              weights: dict = None):
     """
     Compute signal from OHLCV bars only (no external data fetching).
     Used for backtesting where we walk through historical data.
+    weights: optional per-component budgets passed to calc_trend_score
+    (used for A/B testing recalibrated weights against defaults).
     Returns dict with signal info, or None if insufficient data.
     """
     valid_bars = [b for b in bars if b.get("close") is not None]
@@ -2343,12 +2388,19 @@ def compute_signal_from_ohlcv(bars: list, benchmark_closes: list = None):
     context["rs_60d"] = rs_data.get("rs_60d")
     context["rr_ratio"] = risk.get("rr_ratio")
 
-    return calc_trend_score(ma, macd_data, rsi_data, vol_data, bias_data,
-                            support_data, context)
+    score = calc_trend_score(ma, macd_data, rsi_data, vol_data, bias_data,
+                             support_data, context, weights=weights)
+    if score is not None:
+        # Record the market regime this signal was generated in, so backtest
+        # aggregation can segment ICs by phase (uptrend_pullback /
+        # downtrend_decline / range_swing).
+        score["phase"] = context.get("phase", "unknown")
+    return score
 
 
 def backtest_stock(code: str, days: int = 252, forward_days: list = None,
-                   ohlcv_data: list = None, bench_closes: list = None) -> dict:
+                   ohlcv_data: list = None, bench_closes: list = None,
+                   weights: dict = None) -> dict:
     """
     Walk through historical data day-by-day, generate signals at each point,
     and track forward returns for calibration.
@@ -2368,6 +2420,14 @@ def backtest_stock(code: str, days: int = 252, forward_days: list = None,
         else:
             return {"code": code, "error": f"unknown_market: {market}"}
         ohlcv_data = raw.get("ohlcv", [])
+        # Fetch benchmark for relative-strength scoring (fixes rs IC stuck
+        # at 0.0 because bench_closes was never fetched in this path).
+        if bench_closes is None:
+            try:
+                bench_closes = _benchmark_closes(market, days=min(total_days, 500))
+            except Exception as e:
+                _log(f"[backtest] benchmark fetch failed for {code}: {e}; "
+                     f"RS will score neutral")
 
     if len(ohlcv_data) < _MIN_BARS_FOR_INDICATORS + max(forward_days):
         return {"code": code, "error": "insufficient_data",
@@ -2380,7 +2440,7 @@ def backtest_stock(code: str, days: int = 252, forward_days: list = None,
     signals = []
     for i in range(start_idx, end_idx):
         window = ohlcv_data[:i + 1]
-        score = compute_signal_from_ohlcv(window, bench_closes)
+        score = compute_signal_from_ohlcv(window, bench_closes, weights=weights)
         if score is None:
             continue
 
@@ -2399,6 +2459,7 @@ def backtest_stock(code: str, days: int = 252, forward_days: list = None,
             "score_total": score["total"],
             "signal": score["signal"],
             "breakdown": score["breakdown"],
+            "phase": score.get("phase", "unknown"),
             "entry_price": closes[-1],
             "forward_returns": fwd_returns,
         })
@@ -2423,52 +2484,57 @@ def _pearson(xs, ys):
     return round(num / (dx * dy), 4) if dx > 0 and dy > 0 else None
 
 
+def _grouped_stats(signals: list, key_fn, forward_days: list) -> dict:
+    """
+    Aggregate signals into per-group statistics (count, forward-return
+    mean/median/win_rate per horizon, and per-horizon score-return IC).
+    Used for by_signal / by_bucket / by_phase segmentation.
+    """
+    groups = {}
+    for s in signals:
+        groups.setdefault(key_fn(s), []).append(s)
+
+    stats = {}
+    for gname, sigs in groups.items():
+        entry = {"count": len(sigs)}
+        for fd in forward_days:
+            rets = [s["forward_returns"].get(f"{fd}d") for s in sigs
+                    if s["forward_returns"].get(f"{fd}d") is not None]
+            if rets:
+                entry[f"fwd_{fd}d"] = {
+                    "mean": round(sum(rets) / len(rets), 2),
+                    "median": round(sorted(rets)[len(rets) // 2], 2),
+                    "win_rate": round(sum(1 for r in rets if r > 0) / len(rets) * 100, 1),
+                    "count": len(rets),
+                }
+            pairs = [(s["score_total"], s["forward_returns"][f"{fd}d"])
+                     for s in sigs if s["forward_returns"].get(f"{fd}d") is not None]
+            if len(pairs) >= 3:
+                corr = _pearson([p[0] for p in pairs], [p[1] for p in pairs])
+                if corr is not None:
+                    entry[f"score_vs_{fd}d"] = corr
+        stats[gname] = entry
+    return stats
+
+
 def _aggregate_calibration(signals: list, forward_days: list) -> dict:
     """Aggregate signals into calibration statistics."""
     if not signals:
         return {"error": "no_signals_generated"}
 
     # By signal type
-    by_signal = {}
-    for sig in signals:
-        by_signal.setdefault(sig["signal"], []).append(sig)
-
-    signal_stats = {}
-    for signal_type, sigs in by_signal.items():
-        stats = {"count": len(sigs)}
-        for fd in forward_days:
-            rets = [s["forward_returns"].get(f"{fd}d") for s in sigs
-                    if s["forward_returns"].get(f"{fd}d") is not None]
-            if rets:
-                stats[f"fwd_{fd}d"] = {
-                    "mean": round(sum(rets) / len(rets), 2),
-                    "median": round(sorted(rets)[len(rets) // 2], 2),
-                    "win_rate": round(sum(1 for r in rets if r > 0) / len(rets) * 100, 1),
-                    "count": len(rets),
-                }
-        signal_stats[signal_type] = stats
+    signal_stats = _grouped_stats(signals, lambda s: s["signal"], forward_days)
 
     # By score bucket
-    by_bucket = {}
-    for sig in signals:
-        total = sig["score_total"]
-        bucket = next((b[2] for b in _SCORE_BUCKETS if b[0] <= total < b[1]), "unknown")
-        by_bucket.setdefault(bucket, []).append(sig)
+    def _bucket_of(s):
+        return next((b[2] for b in _SCORE_BUCKETS if b[0] <= s["score_total"] < b[1]),
+                    "unknown")
+    bucket_stats = _grouped_stats(signals, _bucket_of, forward_days)
 
-    bucket_stats = {}
-    for bucket_name, sigs in by_bucket.items():
-        stats = {"count": len(sigs)}
-        for fd in forward_days:
-            rets = [s["forward_returns"].get(f"{fd}d") for s in sigs
-                    if s["forward_returns"].get(f"{fd}d") is not None]
-            if rets:
-                stats[f"fwd_{fd}d"] = {
-                    "mean": round(sum(rets) / len(rets), 2),
-                    "median": round(sorted(rets)[len(rets) // 2], 2),
-                    "win_rate": round(sum(1 for r in rets if r > 0) / len(rets) * 100, 1),
-                    "count": len(rets),
-                }
-        bucket_stats[bucket_name] = stats
+    # By market regime (phase): this is where a momentum score may work in
+    # uptrends but invert in downtrends — pooled ICs hide that.
+    phase_stats = _grouped_stats(signals, lambda s: s.get("phase", "unknown"),
+                                 forward_days)
 
     # Score-return correlation
     correlations = {}
@@ -2485,6 +2551,7 @@ def _aggregate_calibration(signals: list, forward_days: list) -> dict:
     return {
         "by_signal": signal_stats,
         "by_bucket": bucket_stats,
+        "by_phase": phase_stats,
         "correlations": correlations,
         "component_correlations": component_corr,
     }
@@ -2513,6 +2580,256 @@ def _component_correlation(signals: list, forward_days: list) -> dict:
     )
     result["ranked_for_20d"] = [{k: v} for k, v in sorted_comps]
     return result
+
+
+def recalibrate_weights(calib_results: list, horizon: str = "20d",
+                        method: str = "tanh") -> dict:
+    """
+    Derive data-driven component weights from backtest ICs.
+
+
+
+    Args:
+        calib_results: list of dicts returned by backtest_stock (each must contain
+            `component_correlations` with `{comp}_vs_{horizon}` keys and optionally
+            `correlations.score_vs_{horizon}`).
+        horizon: forward-return horizon used for ICs (default "20d").
+        method: how IC maps to a weight multiplier:
+            - "tanh": m = 1 + tanh(ic*8)*0.5 (soft, bounded [0.5,1.5] default)
+)           - "linear": m = clip(1 + ic*2, 0.5, 1.5)
+
+    Returns dict (.weights = suggested budgets summing to ≈ 100,
+    delta, ics, score_vs_{horizon}, n_stocks, note).
+    """
+    import math
+
+    comps = list(_DEFAULT_WEIGHTS.keys())
+    key = f"_vs_{horizon}"
+    ics = {}
+    for comp in comps:
+        vals = []
+        for calib in calib_results:
+            cc = calib.get("component_correlations") or {}
+            v = cc.get(f"{comp}{key}")
+            if v is not None:
+                vals.append(v)
+        ics[comp] = (sum(vals) / len(vals)) if vals else 0.0
+
+    tot_ic = sum(abs(v) for v in ics.values())
+    note = ""
+    # Anti-predictive guard: if nearly all component ICs are negative, the
+    # score is INVERSELY correlated with forward returns in-sample. Rescaling
+    # budgets cannot fix a sign problem (it only nudges magnitudes), so refuse
+    # to recalibrate and point the user at the real issue.
+    neg_count = sum(1 for v in ics.values() if v < 0)
+    if calib_results and tot_ic >= 0.15 and neg_count >= len(comps) - 1:
+        note = (f"score is anti-predictive in-sample ({neg_count}/{len(comps)} "
+                f"component ICs < 0): weight tuning cannot fix a sign problem. "
+                f"Keeping default weights; investigate the regime (mean-reverting "
+                f"window?), buy/sell thresholds, or scoring logic before trusting "
+                f"high scores")
+        return {"weights": dict(_DEFAULT_WEIGHTS), "delta": {k: 0 for k in comps},
+                "ics": {k: round(v, 4) for k, v in ics.items()},
+                "score_vs_20d": None, "n_stocks": len(calib_results),
+                "method": method, "note": note}
+    if tot_ic < 0.15 or not calib_results:
+        note = ("IC signal too weak or no data); keep default weights instead of "
+               "chasing noise" if not calib_results else
+               f"IC signal too weak (total |ic|={tot_ic:.2f} < 0.15 across 7 components); "
+               "keep default weights instead of chasing noise")
+        return {"weights": dict(_DEFAULT_WEIGHTS), "delta": {k: 0 for k in comps},
+                "ics":  ics, "score_vs_20d": None, "n_stocks": len(calib_results),
+                "method": method, "note": note}
+
+    mult = {}
+    for comp in comps:
+        ic =  ics[comp]
+        if method == "linear":
+            m = min(1.5, max(0.5, 1 + ic * 2))
+        else:
+            m =  1 + math.tanh(ic * 8) * 0.5
+        mult[comp] = m
+
+    raw = {comp: _DEFAULT_WEIGHTS[comp] * mult[comp] for comp in comps}
+    s_raw = sum(raw.values())
+    w = {comp: round(100 * v / s_raw) for comp, v in raw.items()}
+    # Fix rounding drift so budgets sum to exactly 100.
+    drift =  100 - sum(w.values())
+    if drift:
+        top = max(w, key=w.get)
+        w[top] += drift
+
+    delta = {comp: w[comp] - _DEFAULT_WEIGHTS[comp] for comp in comps}
+    score_vs = None
+    for calib in calib_results:
+        sv = calib.get("correlations", {}).get(f"score_vs_{horizon}")
+        if sv is not None:
+            score_vs = sv if score_vs is None else round((score_vs + sv) / 2, 4)
+
+    weights = {k: int(v) for k, v in w.items()}
+    return {
+        "weights": weights,
+        "delta": delta,
+        "ics": {k: round(v, 4) for k, v in ics.items()},
+        "score_vs_20d": score_vs,
+        "n_stocks": len(calib_results),
+        "method": method,
+        "note": note,
+    }
+
+
+def pooled_phase_analysis(calib_results: list) -> dict:
+    """
+    Cross-stock pooled IC by market regime (phase).
+
+    A momentum-style score often works (positive IC) inside uptrend_pullback
+    and inverts (negative IC) inside downtrend_decline; pooling signals across
+    regimes hides exactly that. This pools each phase's per-stock stats
+    (count-weighted) so regime-conditional behavior becomes visible.
+
+    Returns {phase: {total_signals, pooled_score_vs_20d, pooled_fwd_20d_mean,
+    n_stocks}}.
+    """
+    phases = {}
+    for calib in calib_results:
+        if "error" in calib:
+            continue
+        for ph, st in (calib.get("by_phase") or {}).items():
+            n = st.get("count", 0)
+            p = phases.setdefault(ph, {"count": 0, "ic": [], "mean20": [],
+                                       "stocks": set()})
+            p["count"] += n
+            p["stocks"].add(calib.get("code", "?"))
+            if st.get("score_vs_20d") is not None and n > 0:
+                p["ic"].append((n, st["score_vs_20d"]))
+            m20 = (st.get("fwd_20d") or {}).get("mean")
+            if m20 is not None and n > 0:
+                p["mean20"].append((n, m20))
+
+    out = {}
+    for ph, p in phases.items():
+        def _wavg(pairs):
+            tot = sum(c for c, _ in pairs)
+            return round(sum(c * v for c, v in pairs) / tot, 4) if tot else None
+        out[ph] = {
+            "total_signals": p["count"],
+            "pooled_score_vs_20d": _wavg(p["ic"]),
+            "pooled_fwd_20d_mean": _wavg(p["mean20"]),
+            "n_stocks": len(p["stocks"]),
+        }
+    return out
+
+
+def _fetch_backtest_data(code: str, days: int, forward_days: list):
+    """Fetch OHLCV + benchmark closes once so multiple weight sets can be
+    backtested on identical data (A/B fairness). Returns (ohlcv, bench, error)."""
+    market, normalized, display = classify_stock(code)
+    total_days = days + max(forward_days) + 10
+    if market == "cn_a":
+        raw = fetch_cn_a(normalized, total_days)
+    elif market == "cn_hk":
+        raw = fetch_hk(normalized, total_days)
+    elif market == "us":
+        raw = fetch_us(normalized, total_days)
+    else:
+        return None, None, f"unknown_market: {market}"
+    ohlcv = raw.get("ohlcv", [])
+    bench = None
+    try:
+        bench = _benchmark_closes(market, days=min(total_days, 500))
+    except Exception as e:
+        _log(f"[ab] benchmark fetch failed for {code}: {e}; RS neutral")
+    return ohlcv, bench, None
+
+
+def ab_compare(codes: list, weight_sets: list, days: int = 252,
+               forward_days: list = None) -> dict:
+    """
+    A/B test weight sets on identical historical data.
+
+    weight_sets: list of (name, weights) tuples, e.g.
+        [("default", None), ("suggested", {...recalibrated...})]
+
+    For fairness each code's OHLCV and benchmark are fetched exactly once,
+    then every weight set is scored over the same walk-forward windows.
+
+    Returns per-stock and aggregate comparison (score_vs_20d, buy/sell 20d
+    mean returns) so recalibrated weights can be judged against defaults.
+    """
+    if forward_days is None:
+        forward_days = [5, 10, 20]
+    h20 = "fwd_20d" if 20 in forward_days else f"fwd_{max(forward_days)}d"
+
+    per_stock = {}
+    agg = {name: {"score_vs": [], "buy20": [], "sell20": [], "n": 0}
+           for name, _ in weight_sets}
+
+    for code in codes:
+        try:
+            ohlcv, bench, err = _fetch_backtest_data(code, days, forward_days)
+            if err:
+                per_stock[code] = {"error": err}
+                continue
+            runs = {}
+            for name, weights in weight_sets:
+                calib = backtest_stock(code, days=days, forward_days=forward_days,
+                                       ohlcv_data=ohlcv, bench_closes=bench,
+                                       weights=weights)
+                if "error" in calib:
+                    runs[name] = {"error": calib["error"]}
+                    continue
+                sv = (calib.get("correlations") or {}).get(f"score_vs_{max(forward_days)}d")
+                by_sig = calib.get("by_signal") or {}
+                buy20 = (by_sig.get("buy", {}).get(h20) or {}).get("mean")
+                sell20 = (by_sig.get("sell", {}).get(h20) or {}).get("mean")
+                runs[name] = {"score_vs": sv, "buy_20d": buy20,
+                              "sell_20d": sell20, "n_signals": calib.get("total_signals")}
+                a = agg[name]
+                a["n"] += 1
+                if sv is not None:
+                    a["score_vs"].append(sv)
+                if buy20 is not None:
+                    a["buy20"].append(buy20)
+                if sell20 is not None:
+                    a["sell20"].append(sell20)
+            per_stock[code] = runs
+        except Exception as e:
+            per_stock[code] = {"error": f"{type(e).__name__}: {e}"}
+
+    aggregate = {}
+    for name, a in agg.items():
+        aggregate[name] = {
+            "avg_score_vs": round(sum(a["score_vs"]) / len(a["score_vs"]), 4) if a["score_vs"] else None,
+            "avg_buy_20d": round(sum(a["buy20"]) / len(a["buy20"]), 4) if a["buy20"] else None,
+            "avg_sell_20d": round(sum(a["sell20"]) / len(a["sell20"]), 4) if a["sell20"] else None,
+            "n_stocks": a["n"],
+        }
+
+    return {"weight_sets": {name: w for name, w in weight_sets},
+            "per_stock": per_stock, "aggregate": aggregate,
+            "forward_days": forward_days}
+
+
+def ab_report(ab: dict) -> str:
+    """Human-readable A/B comparison table."""
+    lines = ["=== Weight A/B Comparison ==="]
+    for code, runs in ab.get("per_stock", {}).items():
+        if "error" in runs:
+            lines.append(f"{code}: ERROR {runs['error']}")
+            continue
+        parts = []
+        for name, r in runs.items():
+            if "error" in r:
+                parts.append(f"{name}: ERR")
+            else:
+                parts.append(f"{name}: ic={r['score_vs']} buy20={r['buy_20d']}%")
+        lines.append(f"{code}: " + " | ".join(parts))
+    lines.append("-- aggregate --")
+    for name, a in ab.get("aggregate", {}).items():
+        lines.append(f"{name}: avg_ic={a['avg_score_vs']} "
+                     f"avg_buy20={a['avg_buy_20d']}% avg_sell20={a['avg_sell_20d']}% "
+                     f"(n={a['n_stocks']})")
+    return "\n".join(lines)
 
 
 def backtest_report(calib: dict) -> str:
@@ -2553,6 +2870,20 @@ def backtest_report(calib: dict) -> str:
                 lines.append(f"    {fd}d: mean={s['mean']}% median={s['median']}% "
                              f"win={s['win_rate']}% (n={s['count']})")
     lines.append("")
+
+    if calib.get("by_phase"):
+        lines.append("--- By Market Regime (Phase) ---")
+        for ph, stats in calib["by_phase"].items():
+            lines.append(f"  {ph} (n={stats['count']}):")
+            for fd in calib["forward_days"]:
+                key = f"fwd_{fd}d"
+                ic = stats.get(f"score_vs_{fd}d")
+                if key in stats:
+                    s = stats[key]
+                    ic_s = f" ic={ic}" if ic is not None else ""
+                    lines.append(f"    {fd}d: mean={s['mean']}% win={s['win_rate']}%"
+                                 f" (n={s['count']}){ic_s}")
+        lines.append("")
 
     lines.append("--- Component Correlation with 20d Forward Return ---")
     for item in calib["component_correlations"].get("ranked_for_20d", []):
@@ -2622,6 +2953,16 @@ def _generate_calibration_suggestions(calib: dict) -> list:
             f"Buy signals underperform sell signals ({buy_rets}% vs {sell_rets}% 20d). "
             "Buy thresholds may be too loose or buy logic flawed.")
 
+    # Regime-conditional check: opposite-sign ICs across market phases
+    ph = calib.get("by_phase") or {}
+    up_ic = ph.get("uptrend_pullback", {}).get("score_vs_20d")
+    dn_ic = ph.get("downtrend_decline", {}).get("score_vs_20d")
+    if up_ic is not None and dn_ic is not None and up_ic > 0.05 and dn_ic < -0.05:
+        suggestions.append(
+            f"Score predicts positively in uptrend_pullback (ic={up_ic}) but "
+            f"inverts in downtrend_decline (ic={dn_ic}). Consider gating buy "
+            f"signals on regime (phase) rather than global score thresholds.")
+
     return suggestions
 
 
@@ -2633,6 +2974,9 @@ def main():
     parser.add_argument("--backtest", action="store_true", help="Run backtest calibration (walks through historical data, generates signals, tracks forward returns)")
     parser.add_argument("--backtest-days", type=int, default=252, help="Backtest lookback window in trading days (default 252)")
     parser.add_argument("--forward-days", type=str, default="5,10,20", help="Forward return horizons in trading days (comma-separated)")
+    parser.add_argument("--calibrate", action="store_true", help="After backtest, derive suggested component weights from ICs and print comparison table (also saved to output JSON under 'calibration')")
+    parser.add_argument("--calibrate-method", choices=["tanh", "linear"], default="tanh", help="IC -> weight multiplier mapping (default tanh)")
+    parser.add_argument("--ab-test", action="store_true", help="After calibration, A/B test suggested weights vs defaults on identical data and report which predicts better")
     args = parser.parse_args()
 
     codes = [c.strip() for c in args.stocks.split(",") if c.strip()]
@@ -2680,6 +3024,37 @@ def main():
             "total_requested": len(codes),
             "total_success": len(backtest_results),
         }
+        # Regime-segmented IC: pooled by pullback phase across stocks.
+        if backtest_results:
+            ph_analysis = pooled_phase_analysis(backtest_results)
+            output["phase_analysis"] = ph_analysis
+            _log("\n=== Pooled IC by Market Regime (Phase) ===")
+            for ph, st in ph_analysis.items():
+                _log(f"  {ph:<20} n={st['total_signals']:>4} "
+                     f"ic20={st['pooled_score_vs_20d']} "
+                     f"fwd20_mean={st['pooled_fwd_20d_mean']}% "
+                     f"(stocks={st['n_stocks']})")
+        # Weight calibration (optional): derive suggested weights from ICs.
+        if args.calibrate:
+            cal = recalibrate_weights(backtest_results, method=args.calibrate_method)
+            output["calibration"] = cal
+            _log(f"\n=== Suggested Component Weights (method: {cal['method']}) ===")
+            _log(f"\nn_stocks: {cal['n_stocks']} | score_vs_20d: {cal['score_vs_20d']}")
+            if cal["note"]:
+                _log(f"note: {cal['note']}")
+            else:
+                _log(f"{'component':<20}{'default':>8}{'suggested':>11}{'delta':>7}{'IC':>10}")
+                for comp in ("trend", "bias", "volume", "macd", "rsi", "relative_strength", "support"):
+                    _log(f"{comp:<20}{_DEFAULT_WEIGHTS[comp]:>8}{cal['weights'][comp]:>11}{cal['delta'][comp]:>7}{cal['ics'].get(comp, 0.0):>10}")
+            # A/B: suggested weights vs defaults on identical data.
+            if args.ab_test and not cal["note"]:
+                _log("\n[ab] running A/B: default vs suggested weights...")
+                ab = ab_compare(codes, [("default", None),
+                                        ("suggested", cal["weights"])],
+                                days=args.backtest_days,
+                                forward_days=forward_days)
+                output["ab_test"] = ab
+                _log(f"\n{ab_report(ab)}")
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return
 
