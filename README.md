@@ -1,243 +1,242 @@
-# 📊 Stock Analysis Skill for Claude Code
+# 📊 Stock Analysis Skill for Ai Coding
 
-> 一个 Claude Code 技能插件，输入股票代码即可自动生成专业级决策看板。支持 A股、港股、美股三大市场。
+> An AI Coding Skill plugin that generates professional-grade decision dashboards from stock tickers. Supports A-shares, HK stocks, and US stocks.
 
 ![Python](https://img.shields.io/badge/Python-3.9+-blue?logo=python&logoColor=white)
-![Claude Code](https://img.shields.io/badge/Claude_Code-Skill-blueviolet?logo=anthropic&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Markets](https://img.shields.io/badge/Markets-A股_|_港股_|_美股-orange)
+![Markets](https://img.shields.io/badge/Markets-A--Share_|__HK_|__US-orange)
 
-## 核心特性
+## Core Features
 
-| 特性              | 说明                                            |
-| ----------------- | ----------------------------------------------- |
-| **三大市场**      | A股（600519）、港股（HK00700）、美股（TSLA）    |
-| **智能数据源**    | 分级降级策略，支持 Tushare/同花顺官方API/efinance/同花顺/akshare/yfinance |
-| **完整技术分析**  | MA / MACD / RSI / 量能 / 乖离率 / 支撑位        |
-| **100分评分系统** | 6维度综合评分，自动生成买卖信号                 |
-| **AI 深度分析**   | Claude 自身作为分析引擎，综合技术面+消息面      |
-| **零配置可用**    | 开箱即用免费数据源，配置 API Key 后数据更精准   |
-| **严进策略**      | 不追高（乖离率>5%不买）、偏好缩量回调、精确止损 |
+| Feature | Description |
+| -------------------------------- | ------------------------------------------------------------ |
+| **Three Major Markets** | A-shares (600519), HK stocks (HK00700), US stocks(TSLA) |
+| **Smart Data Sources** | Graceful degradation strategy, supports Tushare/THS Official API/efinance/THS/akshare/yfinance |
+| **Complete Technical Analysis** | MA / MACD / RSI / Volume / Bias / Support Levels |
+| **100-Point Scoring System** | 6-dimension composite scoring, auto-generates buy/sell signals |
+| **AI Deep Analysis** | Claude itself as the analysis engine, combining technical + news sentiment |
+| **Zero Config Required** | Works out-of-the-box with free data sources; more accurate with API keys configured |
+| **Strict Entry Strategy** | No chasing highs (bias >5% = no buy), prefers volume-contraction pullbacks, precise stop-loss |
 
-## 快速开始
+## Quick Start
 
-### 安装
+### Installation
 
-将本项目克隆到 Claude Code 的 skills 目录：
+Clone this project to Ai Coding's skills directory:
 
 ```bash
-git clone https://github.com/liusai0820/Stock-Analysis-Skill.git ~/.claude/skills/stock-analysis
+git clone https://github.com/wwilson414/skill-stockAnalysis.git ~/.claude/skills/stock-analysis
 ```
 
-Python 依赖会在首次运行时自动安装：
+Python dependencies will be auto-installed on first run:
 
 ```bash
 pip3 install akshare yfinance
 ```
 
-### 使用
+### Usage
 
-在 Claude Code 中直接输入：
+Enter directly in Ai Coding:
 
-```
+```text
 /stock-analysis TSLA
 /stock-analysis TSLA,PLTR,RKLB
 /stock-analysis 600519
 /stock-analysis HK00700
 ```
 
-或者用自然语言：
+Or use natural language:
 
-```
-帮我分析下 TSLA
-600519 怎么样？
-看看 PLTR 和 RKLB 的技术面
-```
-
-## 工作原理
-
-```
-用户输入股票代码
-      │
-      ▼
-[STEP 1] 解析输入 → 识别市场（A股/港股/美股），标准化代码
-      │
-      ▼
-[STEP 2] Python 脚本获取数据 → 实时行情 + 120日K线 + 技术指标计算
-      │
-      ▼
-[STEP 3] WebSearch 搜索最新新闻 → 2-3条/股
-      │
-      ▼
-[STEP 4] Claude AI 综合分析 → 技术面(60%) + 消息面(30%) + 宏观(10%)
-      │
-      ▼
-[STEP 5] 输出决策看板 → 评分 / 信号 / 目标价 / 止损价
+```text
+Analyze TSLA for me
+How is 600519?
+Check the technicals for PLTR and RKLB
 ```
 
-## 输出示例
+## How It Works
 
+```text
+User inputs stock ticker
+       │
+       ▼
+[STEP 1] Parse input → Identify market (A-share/HK/US), normalize ticker
+       │
+       ▼
+[STEP 2] Python script fetches data → Real-time quotes + 120-day K-line + technical indicators
+       │
+       ▼
+[STEP 3] WebSearch for latest news → 2-3 items per stock
+       │
+       ▼
+[STEP 4] Claude AI comprehensive analysis → Technical (60%) + News (30%) + Macro (10%)
+       │
+       ▼
+[STEP 5] Output decision dashboard → Score / Signal / Target Price / Stop-Loss
 ```
-## 2026-03-04 股票决策看板
 
-1 只股票分析完成 | 买入: 0 | 持有: 0 | 卖出: 1
+## Output Example
 
-### Tesla, Inc.(TSLA) — ⚪ 观望
+```text
+## 2026-03-04 Stock Decision Dashboard
 
-| 指标 | 数值 |
-|------|------|
-| 现价 | $392.43 (-2.70%) |
-| 综合评分 | 31/100 |
-| 信号 | 观望 |
-| 市盈率 | 356.75 |
-| 市净率 | 17.92 |
+1 stock analyzed | Buy: 0 | Hold: 0 | Sell: 1
 
-**技术面**
-- 均线: MA5=404.85 MA10=406.83 MA20=411.03 | 空头排列
-- MACD: DIF=-8.00 DEA=-7.33 柱=-1.33 | 死叉
-- RSI: RSI6=28.45 RSI12=35.84 RSI24=41.54 | 弱势
-- 量能: 量比 1.12 | 正常
-- 乖离率: MA5乖离 -3.07%
+### Tesla, Inc. (TSLA) — ⚪ Wait
 
-**AI 判断**
-TSLA 当前处于明显的空头格局，MA 三线空头排列，MACD 死叉...
+| Metric | Value |
+|--------|-------|
+| Current Price | $392.43 (-2.70%) |
+| Composite Score | 31/100 |
+| Signal | Wait |
+| P/E Ratio | 356.75 |
+| P/B Ratio | 17.92 |
 
-**价格目标**
-| 入场价 | 目标价 | 止损价 |
-|--------|--------|--------|
+**Technical Analysis**
+- MA: MA5=404.85 MA10=406.83 MA20=411.03 | Bearish Alignment
+- MACD: DIF=-8.00 DEA=-7.33 Histogram=-1.33 | Death Cross
+- RSI: RSI6=28.45 RSI12=35.84 RSI24=41.54 | Weak
+- Volume: Volume Ratio 1.12 | Normal
+- Bias: MA5 Bias -3.07%
+
+**AI Judgment**
+TSLA is currently in a clear bearish pattern with MA triple-line bearish alignment and MACD death cross...
+
+**Price Targets**
+| Entry Price | Target Price | Stop-Loss |
+|-------------|--------------|-----------|
 | $385 | $437 (+13.5%) | $370 (-3.9%) |
 ```
 
-## 评分系统
+## Scoring System
 
-综合评分满分 100 分，由 6 个维度构成：
+Composite score is out of 100 points, composed of 6 dimensions:
 
-| 维度           | 满分 | 最佳情况          | 最差情况       |
-| -------------- | ---- | ----------------- | -------------- |
-| 趋势（MA排列） | 30   | 强势多头=30       | 强势空头=0     |
-| 乖离率         | 20   | 略低于MA5=20      | 远超MA5(>5%)=4 |
-| MACD           | 15   | 零轴上金叉=15     | 死叉=0         |
-| 量能           | 15   | 缩量回调=15       | 放量下跌=0     |
-| RSI            | 10   | 超卖=10           | 超买=0         |
-| 支撑           | 10   | MA5+MA10双支撑=10 | 无支撑=0       |
+| Dimension | Max Score | Best Case | Worst Case |
+| --------------------- | --------- | ------------------- | ----------------- |
+| Trend (MA Alignment) | 30 | Strong Bullish = 30 | Strong Bearish = 0 |
+| Bias Rate | 20 | Slightly below MA5 = 20 | Far above MA5 (>5%) = 4 |
+| MACD | 15 | Golden cross above zero = 15 | Death cross = 0 |
+| Volume | 15 | Volume-contraction pullback = 15 | High-volume drop = 0 |
+| RSI | 10 | Oversold = 10 | Overbought = 0 |
+| Support | 10 | MA5+MA10 dual support = 10 | No support = 0 |
 
-### 信号映射
+### Signal Mapping
 
-| 评分 | 条件        | 信号        |
-| ---- | ----------- | ----------- |
-| ≥75  | 多头排列    | 🟢 强烈买入 |
-| ≥60  | 多/弱多排列 | 🔵 买入     |
-| ≥45  | 任意        | 🟡 持有     |
-| ≥30  | 任意        | ⚪ 观望     |
-| <30  | 空头排列    | 🔴 强烈卖出 |
-| <30  | 非空头      | 🟠 卖出     |
+| Score | Condition             | Signal      |
+| ----- | ----------------      | ----------- |
+| >=75  | Bullish alignment     | Strong Buy  |
+| >=60  | Bullish/Weak bullish  | Buy         |
+| >=45  | Any                   | Hold        |
+| >=30  | Any                   | Wait        |
+| <30   | Bearish alignment     | Strong Sell |
+| <30   | Non-bearish           | Sell        |
 
-## 硬性规则（严进策略）
+## Hard Rules (Strict Entry Strategy)
 
-1. **RSI > 80** → 绝不给买入信号（超买风险）
-2. **乖离率 MA5 > 5%** → 绝不给买入信号（不追高）
-3. **偏好缩量回调** → 最佳买入时机
-4. **必须给精确止损** → 基于 MA20 或近期低点
-5. **必须给精确目标价** → 基于近期压力位或 MA60
+1. **RSI > 80** -> NEVER give buy signal (overbought risk)
+2. **Bias MA5 > 5%** -> NEVER give buy signal (no chasing highs)
+3. **Prefer volume-contraction pullbacks** -> Best entry timing
+4. **Must provide precise stop-loss** -> Based on MA20 or recent low
+5. **Must provide precise target price** -> Based on recent resistance or MA60
 
-## 技术指标详解
+## Technical Indicators Explained
 
-### 均线系统 (MA)
+### Moving Average System (MA)
 
-- **MA5 / MA10 / MA20 / MA60** — 简单移动平均线
-- 多头排列 (MA5>MA10>MA20) = 上升趋势
-- 空头排列 (MA5<MA10<MA20) = 下降趋势
+- **MA5 / MA10 / MA20 / MA60** - Simple Moving Averages
+- Bullish alignment (MA5>MA10>MA20) = Uptrend
+- Bearish alignment (MA5<MA10<MA20) = Downtrend
 
 ### MACD (12/26/9)
 
 - **DIF** = EMA12 - EMA26
 - **DEA** = EMA9(DIF)
-- **柱状图** = (DIF - DEA) × 2
-- 金叉（DIF上穿DEA）= 买入信号
-- 死叉（DIF下穿DEA）= 卖出信号
+- **Histogram** = (DIF - DEA) x 2
+- Golden cross (DIF crosses above DEA) = Buy signal
+- Death cross (DIF crosses below DEA) = Sell signal
 
 ### RSI (6/12/24)
 
-- Wilder's RSI 算法
-- <20 超卖（反弹机会）| 20-40 弱势 | 40-60 中性 | 60-80 强势 | >80 超买（回调风险）
+- Wilder's RSI algorithm
+- <20 Oversold (rebound opportunity) | 20-40 Weak | 40-60 Neutral | 60-80 Strong | >80 Overbought (pullback risk)
 
-### 量能分析
+### Volume Analysis
 
-- 量比 = 当日成交量 / 前5日均量
-- 放量上涨 (>1.5x + 涨) | 缩量回调 (<0.7x + 跌) | 放量下跌 (>1.5x + 跌)
+- Volume Ratio = Today's Volume / Previous 5-day Average Volume
+- High-volume rally (>1.5x + up) | Volume-contraction pullback (<0.7x + down) | High-volume drop (>1.5x + down)
 
-## 数据源配置（可选增强）
+## Data Source Configuration (Optional Enhancement)
 
-脚本采用**分级降级策略**，零配置即可运行，配置 API Key 后数据更精准：
+The script uses a **graceful degradation strategy** - works with zero configuration, more accurate with API keys:
 
-| 环境变量 | 用途 | 获取方式 | 免费额度 |
-| -------- | ---- | -------- | -------- |
-| `TUSHARE_TOKEN` | A股专业数据（优先级最高） | [tushare.pro](https://tushare.pro) 注册 | 基础接口免费 |
-| `HITHINK_FINANCE_API_KEY` | 同花顺官方数据API（A股前复权行情+估值+标的检索，优先级仅次于 Tushare）。官方推荐变量名，REST/MCP/CLI/Python 共用；`FUYAO_API_KEY`、`THS_API_KEY` 仍作兼容别名 | [fuyao.aicubes.cn](https://fuyao.aicubes.cn) 登录签发 | 需同花顺账号 |
-| `TAVILY_API_KEY` | 港股/美股新闻搜索（A股新闻已内置 akshare 免费源） | [tavily.com](https://tavily.com) 注册 | 1000次/月 |
-| `SERPAPI_KEY` | 港股/美股新闻搜索 — Google News（备选） | [serpapi.com](https://serpapi.com) 注册 | 100次/月 |
+| Environment Variable | Purpose | How to Obtain | Free Quota |
+| -------------------- | ------- | ------------- | ---------- |
+| `TUSHARE_TOKEN` | A-share professional data (highest priority) | Register at [tushare.pro](https://tushare.pro) | Basic APIs free |
+| `HITHINK_FINANCE_API_KEY` | THS Official Data API (A-share forward-adjusted quotes + valuation + ticker search, second priority after Tushare). Official recommended variable name, shared by REST/MCP/CLI/Python; `FUYAO_API_KEY`, `THS_API_KEY` still supported as aliases | Issue at [fuyao.aicubes.cn](https://fuyao.aicubes.cn) | Requires THS account |
+| `TAVILY_API_KEY` | HK/US stock news search (A-share news has built-in akshare free source) | Register at [tavily.com](https://tavily.com) | 1000 calls/month |
+| `SERPAPI_KEY` | HK/US stock news search - Google News (backup) | Register at [serpapi.com](https://serpapi.com) | 100 calls/month |
 
-### 行情数据降级链
+### Quote Data Degradation Chain
 
-```
-A股:  Tushare Pro → 同花顺官方API(有Key) → efinance → 同花顺 → akshare → yfinance
-港股:  efinance → akshare → 腾讯行情 → yfinance
-美股:  腾讯行情（主力，国内直连稳定）→ yfinance
-```
-
-### 新闻降级链
-
-```
-A股:  akshare 东方财富个股新闻（免费无Key）→ Tavily → SerpAPI(Google News) → Claude WebSearch
-港美: Tavily → SerpAPI(Google News) → Claude WebSearch
+```text
+A-share: Tushare Pro -> THS Official API (with key) -> efinance -> THS -> akshare -> yfinance
+HK:      efinance -> akshare -> Tencent Finance -> yfinance
+US:      Tencent Finance (primary, stable domestic connection) -> yfinance
 ```
 
-## 数据来源
+### News Degradation Chain
 
-| 市场 | 优先级 | 数据源 | Python 库 | 费用 |
-| ---- | ------ | ------ | --------- | ---- |
-| A股  | P0 | Tushare Pro | tushare | 免费（需注册） |
-| A股  | P1 | 同花顺官方API | stdlib 直连（需 HITHINK_FINANCE_API_KEY） | 需同花顺账号 |
-| A股  | P2 | 东方财富 | efinance | 免费 |
-| A股  | P3 | 同花顺 | 无（stdlib 直连） | 免费 |
-| A股  | P4 | 东方财富 | akshare | 免费 |
-| A股  | P5 | Yahoo Finance | yfinance | 免费 |
-| 港股 | P1 | 东方财富 | efinance | 免费 |
-| 港股 | P2 | 东方财富 | akshare | 免费 |
-| 港股 | P3 | 腾讯行情 | 无（stdlib 直连） | 免费 |
-| 港股 | P4 | Yahoo Finance | yfinance | 免费 |
-| 美股 | P0 | 腾讯行情 | 无（stdlib 直连） | 免费 |
-| 美股 | P1 | Yahoo Finance | yfinance | 免费 |
-
-## 项目结构
-
+```text
+A-share: akshare East Money individual stock news (free, no key) -> Tavily -> SerpAPI (Google News) -> Claude WebSearch
+HK/US:   Tavily -> SerpAPI (Google News) -> Claude WebSearch
 ```
+
+## Data Sources
+
+| Market | Priority | Data Source | Python Library | Cost |
+| ------ | -------- | ----------- | -------------- | ---- |
+| A-share | P0 | Tushare Pro | tushare | Free (registration required) |
+| A-share | P1 | THS Official API | stdlib direct (requires HITHINK_FINANCE_API_KEY) | Requires THS account |
+| A-share | P2 | East Money | efinance | Free |
+| A-share | P3 | Tonghuashun | None (stdlib direct) | Free |
+| A-share | P4 | East Money | akshare | Free |
+| A-share | P5 | Yahoo Finance | yfinance | Free |
+| HK | P1 | East Money | efinance | Free |
+| HK | P2 | East Money | akshare | Free |
+| HK | P3 | Tencent Finance | None (stdlib direct) | Free |
+| HK | P4 | Yahoo Finance | yfinance | Free |
+| US | P0 | Tencent Finance | None (stdlib direct) | Free |
+| US | P1 | Yahoo Finance | yfinance | Free |
+
+## Project Structure
+
+```text
 stock-analysis/
-├── SKILL.md                           # 技能定义（Claude Code 入口）
-├── README.md                          # 本文件
-└── references/
-    ├── stock_data_fetcher.py          # 数据获取 + 技术指标计算（~400行）
-    ├── analysis-prompt-template.md    # AI 分析框架模板
-    └── output-format-template.md      # 决策看板输出格式
++-- SKILL.md                           # Skill definition (Claude Code entry point)
++-- README.md                          # This file
++-- references/
+    +-- stock_data_fetcher.py          # Data fetching + technical indicator calculation (~400 lines)
+    +-- analysis-prompt-template.md    # AI analysis framework template
+    +-- output-format-template.md      # Decision dashboard output format
 ```
 
-## 灵感来源
+## Inspiration
 
-本项目核心分析逻辑参考了 [daily_stock_analysis](https://github.com/ZhuLinsen/daily_stock_analysis) 项目，并做了以下改造：
+This project's core analysis logic references the [daily_stock_analysis](https://github.com/ZhuLinsen/daily_stock_analysis) project, with the following improvements:
 
-- **去除外部 LLM 依赖** — 原项目通过 LiteLLM 调用 Gemini/OpenAI，本 Skill 直接用 Claude 自身分析
-- **封装为 Claude Code Skill** — 一条命令即可调用
-- **分级降级数据源** — 保留 Tushare/Tavily 等优质数据源，无 API Key 时自动降级到免费源
-- **精简架构** — 从 50+ 文件精简为 4 个核心文件
+- **Removed external LLM dependency** - Original project used LiteLLM to call Gemini/OpenAI; this Skill uses Claude directly for analysis
+- **Packaged as Claude Code Skill** - One command to invoke
+- **Graceful degradation data sources** - Retains Tushare/Tavily and other quality data sources; auto-degrades to free sources when no API key is available
+- **Streamlined architecture** - Reduced from 50+ files to 4 core files
 
 ## License
 
 MIT
 
-## 作者
+## Author
 
-**Yzz** — 用 AI 杠杆撬动一人公司
+x
 
 ---
 
-> Built with Claude Code ⚡
+> Built with VS Code

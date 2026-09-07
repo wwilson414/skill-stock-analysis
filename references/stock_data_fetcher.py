@@ -4,16 +4,16 @@ Stock Data Fetcher + Technical Indicator Calculator
 Outputs structured JSON for Claude Code analysis.
 No AI/LLM calls -- pure data + math.
 
-复权口径: 降级链所有数据源统一为前复权(qfq)，详见 _SOURCE_ADJUSTMENT 注释。
-任一源取数失败直接抛错切换下一源，绝不静默降级为不复权数据。
+Adjustment standard: All data sources in the degradation chain use forward-adjusted (qfq) prices, see _SOURCE_ADJUSTMENT comments for details.
+If any source fails, immediately throw error and switch to next source; never silently degrade to non-adjusted data.
 
 Data source priority (graceful degradation):
-  A-share: Tushare Pro (if TUSHARE_TOKEN set) > 同花顺官方API(if HITHINK_FINANCE_API_KEY set) > efinance > 同花顺(THS) > akshare > yfinance
-  HK:      efinance > akshare > 腾讯行情 > yfinance
-  US:      腾讯行情 > yfinance
+  A-share: Tushare Pro (if TUSHARE_TOKEN set) > THS Official API(if HITHINK_FINANCE_API_KEY set) > efinance > THS > akshare > yfinance
+  HK:      efinance > akshare > Tencent Finance > yfinance
+  US:      Tencent Finance > yfinance
 
 News search priority (via --news flag):
-  A股:   akshare 东方财富个股新闻 (free, no key) > Tavily > SerpAPI > skip (use WebSearch in Claude)
+  A-share:   akshare East Moneyindividual stock news (free, no key) > Tavily > SerpAPI > skip (use WebSearch in Claude)
   HK/US: Tavily (if TAVILY_API_KEY set) > SerpAPI (if SERPAPI_KEY set) > skip (use WebSearch in Claude)
 
 Usage:
@@ -21,7 +21,7 @@ Usage:
 
 Environment variables (optional, for enhanced data):
     TUSHARE_TOKEN    - Tushare Pro token (free signup at tushare.pro)
-    HITHINK_FINANCE_API_KEY - 同花顺官方金融数据API key (fuyao.aicubes.cn 用同花顺账号签发; 提供A股前复权行情/估值/财务/标的检索; 官方推荐变量名, REST/MCP/CLI/Python 共用; 兼容别名 FUYAO_API_KEY / THS_API_KEY)
+    HITHINK_FINANCE_API_KEY - THS official finance data API key (issued via THS account at fuyao.aicubes.cn; provides A-share forward-adjusted quotes/valuation/financials/ticker search; official recommended variable name, shared by REST/MCP/CLI/Python; compatible aliases FUYAO_API_KEY / THS_API_KEY)
     TAVILY_API_KEY   - Tavily API key (1000 free calls/month)
     SERPAPI_KEY       - SerpAPI key (100 free calls/month)
 """
@@ -47,7 +47,7 @@ def _check_source(name):
     """
     if name not in _AVAILABLE_SOURCES:
         if name == "ths":
-            # 同花顺 uses only stdlib (urllib/json/re) — no pip package needed
+            # THS uses only stdlib (urllib/json/re) — no pip package needed
             _AVAILABLE_SOURCES[name] = True
             return True
         try:
@@ -80,27 +80,27 @@ def classify_stock(code: str) -> tuple:
     code = code.strip()
     upper = code.upper()
 
-    # 港股: HK00700 -> ('cn_hk', '00700', 'HK00700')
+    # HK: HK00700 -> ('cn_hk', '00700', 'HK00700')
     if upper.startswith("HK") and upper[2:].isdigit():
         return ("cn_hk", upper[2:], upper)
 
-    # A股: 600519 -> ('cn_a', '600519', '600519')
+    # A-share: 600519 -> ('cn_a', '600519', '600519')
     if upper.isdigit() and len(upper) == 6:
         return ("cn_a", upper, upper)
 
-    # 美股: TSLA -> ('us', 'TSLA', 'TSLA')
-    # 仅接受 ASCII 字母；中文名(如"贵州茅台") isalpha 也为 True，须排除，
-    # 交由同花顺官方标的检索(需 HITHINK_FINANCE_API_KEY)解析，无 Key 时明确拒绝。
+    # US: TSLA -> ('us', 'TSLA', 'TSLA')
+    # Only accepts ASCII letters; Chinese names (e.g., "Kweichow Moutai") isalpha is also True，must be excluded,
+    # Hand over to THS official ticker search (requires HITHINK_FINANCE_API_KEY) to parse; explicitly reject when no Key.
     if upper.isalpha() and upper.isascii() and 1 <= len(upper) <= 5:
         return ("us", upper, upper)
 
-    # 带后缀的A股: 600519.SH -> strip
+    # A-share with suffix: 600519.SH -> strip
     if "." in upper:
         base, suffix = upper.rsplit(".", 1)
         if suffix in ("SH", "SZ", "SS") and base.isdigit():
             return ("cn_a", base, base)
 
-    # 带前缀的A股: SH600519 -> strip
+    # A-share with prefix: SH600519 -> strip
     if upper[:2] in ("SH", "SZ") and upper[2:].isdigit():
         return ("cn_a", upper[2:], upper[2:])
 
@@ -114,7 +114,7 @@ def to_yfinance_code(code: str, market: str) -> str:
         return f"{num.zfill(4)}.HK"
     if market == "us":
         return code
-    # A股
+    # A-share
     if code.startswith(("600", "601", "603", "688")):
         return f"{code}.SS"
     if code.startswith(("51", "52", "56", "58")):
@@ -151,11 +151,11 @@ def _df_to_ohlcv(df, days):
 # --- Tushare Pro (Priority 0, needs TUSHARE_TOKEN) ---
 
 def _fetch_tushare_a(code: str, days: int):
-    """Fetch A-share via Tushare Pro (qfq 前复权). Returns (ohlcv, source) or raises.
+    """Fetch A-share via Tushare Pro (qfq forward-adjusted). Returns (ohlcv, source) or raises.
 
-    复权统一: 必须用 pro_bar(adj='qfq')。pro.daily() 是不复权数据，除权除息日
-    会产生假跳空，污染 MA/MACD/RSI/回撤。pro_bar 失败时直接抛错，让降级链
-    切换到下一个前复权源，绝不静默降级到不复权。
+    Adjustment unified: must use pro_bar(adj='qfq'). pro.daily() produces non-adjusted data, on ex-dividend dates
+    will produce false price jumps, contaminating MA/MACD/RSI/drawdown. When pro_bar fails, immediately throw error, let degradation chain
+    switch to next forward-adjusted source, never silently degrade to non-adjusted.
     """
     token = os.environ.get("TUSHARE_TOKEN")
     if not token:
@@ -176,7 +176,7 @@ def _fetch_tushare_a(code: str, days: int):
     }
     df = df.rename(columns=col_map)
     df["date"] = df["date"].apply(lambda x: f"{x[:4]}-{x[4:6]}-{x[6:]}" if len(str(x)) == 8 else x)
-    _log(f"[{code}] Using Tushare Pro (qfq 前复权)")
+    _log(f"[{code}] Using Tushare Pro (qfq forward-adjusted)")
     return _df_to_ohlcv(df, days), "tushare"
 
 
@@ -185,43 +185,43 @@ def _fetch_tushare_a(code: str, days: int):
 def _fetch_efinance_a(code: str, days: int):
     """Fetch A-share via efinance (EastMoney). Returns (ohlcv, source) or raises."""
     import efinance as ef
-    df = ef.stock.get_quote_history(code, fqt=1)  # fqt=1: 前复权（显式指定，防默认值变化）
+    df = ef.stock.get_quote_history(code, fqt=1)  # fqt=1: forward-adjusted (explicitly specified to prevent default value changes)
     if df is None or df.empty:
         raise ValueError(f"efinance returned no data for {code}")
     col_map = {
-        "日期": "date", "开盘": "open", "收盘": "close",
-        "最高": "high", "最低": "low", "成交量": "volume",
-        "成交额": "amount", "涨跌幅": "pct_chg",
+        "date": "date", "open": "open", "close": "close",
+        "high": "high", "low": "low", "volume": "volume",
+        "turnover": "amount", "change percent": "pct_chg",
     }
     df = df.rename(columns=col_map)
-    _log(f"[{code}] Using efinance (qfq 前复权)")
+    _log(f"[{code}] Using efinance (qfq forward-adjusted)")
     return _df_to_ohlcv(df, days), "efinance"
 
 
 def _fetch_efinance_hk(code: str, days: int):
     """Fetch HK stock via efinance."""
     import efinance as ef
-    df = ef.stock.get_quote_history(code, stock_type="hk", fqt=1)  # fqt=1: 前复权
+    df = ef.stock.get_quote_history(code, stock_type="hk", fqt=1)  # fqt=1: forward-adjusted
     if df is None or df.empty:
         raise ValueError(f"efinance returned no data for HK{code}")
     col_map = {
-        "日期": "date", "开盘": "open", "收盘": "close",
-        "最高": "high", "最低": "low", "成交量": "volume",
-        "成交额": "amount", "涨跌幅": "pct_chg",
+        "date": "date", "open": "open", "close": "close",
+        "high": "high", "low": "low", "volume": "volume",
+        "turnover": "amount", "change percent": "pct_chg",
     }
     df = df.rename(columns=col_map)
-    _log(f"[HK{code}] Using efinance (qfq 前复权)")
+    _log(f"[HK{code}] Using efinance (qfq forward-adjusted)")
     return _df_to_ohlcv(df, days), "efinance"
 
 
-# --- 同花顺/10jqka (Priority 2, free, zero-dependency via stdlib) ---
+# --- THS/10jqka (Priority 2, free, zero-dependency via stdlib) ---
 #
-# Public JSONP endpoints of d.10jqka.com.cn (同花顺行情). The hs_ prefix only
-# covers A-shares; HK/US return 502 from this endpoint family, so 同花顺 is
+# Public JSONP endpoints of d.10jqka.com.cn (THSquotes). The hs_ prefix only
+# covers A-shares; HK/US return 502 from this endpoint family, so THS is
 # wired into the A-share chain only.
 
 def _ths_http_get(url: str, timeout: int = 12, retries: int = 1) -> str:
-    """GET a 同花顺 JSONP endpoint with browser-like headers.
+    """GET a THS JSONP endpoint with browser-like headers.
 
     retries: number of extra attempts on failure. K-line paths pass
     retries=0 (fail fast — the graceful degradation chain catches errors);
@@ -251,16 +251,16 @@ def _ths_parse_jsonp(body: str) -> dict:
     import re
     m = re.match(r"^[^(]+\((.*)\)\s*;?\s*$", body, re.S)
     if not m:
-        raise ValueError("同花顺 returned unexpected (non-JSONP) response")
+        raise ValueError("THS returned unexpected (non-JSONP) response")
     return json.loads(m.group(1))
 
 
 def _ths_parse_kline_rows(data_str: str) -> list:
-    """Parse a 同花顺 kline payload into normalized OHLCV bars.
+    """Parse a THS kline payload into normalized OHLCV bars.
 
     Row format (CSV, semicolon separated):
       YYYYMMDD,open,high,low,close,volume,amount,pct_chg,...
-    volume unit = 手 (1手 = 100 shares), amount unit = 元.
+    volume unit = lots (1 lot = 100 shares), amount unit = CNY.
     """
     bars = []
     for row in (data_str or "").split(";"):
@@ -291,7 +291,7 @@ def _ths_parse_kline_rows(data_str: str) -> list:
 
 
 def _fetch_ths_a(code: str, days: int) -> tuple:
-    """Fetch A-share daily K-line from 同花顺 (10jqka).
+    """Fetch A-share daily K-line from THS (10jqka).
 
     - last.js returns the ~140 most recent trading days in one request.
     - For longer ranges we merge year files (YYYY.js) backwards from the
@@ -305,7 +305,7 @@ def _fetch_ths_a(code: str, days: int) -> tuple:
         body = _ths_http_get(f"{base}last.js", retries=0)
         bars = _ths_parse_kline_rows(_ths_parse_jsonp(body).get("data", ""))
     except Exception as e:
-        _log(f"[{code}] 同花顺 last.js failed: {e}")
+        _log(f"[{code}] THS last.js failed: {e}")
 
     if len(bars) < days:
         year = datetime.now().year
@@ -317,7 +317,7 @@ def _fetch_ths_a(code: str, days: int) -> tuple:
                 body = _ths_http_get(f"{base}{year}.js", retries=0)
                 ybars = _ths_parse_kline_rows(_ths_parse_jsonp(body).get("data", ""))
             except Exception as e:
-                _log(f"[{code}] 同花顺 {year}.js unavailable: {e}")
+                _log(f"[{code}] THS {year}.js unavailable: {e}")
             if body is not None:
                 for b in ybars:
                     if b["date"] not in have_dates:
@@ -327,7 +327,7 @@ def _fetch_ths_a(code: str, days: int) -> tuple:
             year -= 1
 
     if not bars:
-        raise ValueError(f"同花顺 returned no data for {code}")
+        raise ValueError(f"THS returned no data for {code}")
 
     bars.sort(key=lambda b: b["date"])
     for i in range(1, len(bars)):
@@ -335,12 +335,12 @@ def _fetch_ths_a(code: str, days: int) -> tuple:
         if prev and curr and prev > 0:
             bars[i]["pct_chg"] = round((curr - prev) / prev * 100, 2)
 
-    _log(f"[{code}] Using 同花顺 (free, stdlib-only, {len(bars)} bars)")
+    _log(f"[{code}] Using THS (free, stdlib-only, {len(bars)} bars)")
     return bars[-days:], "ths"
 
 
 def _fetch_realtime_ths(code: str) -> dict:
-    """Fetch A-share realtime snapshot from 同花顺 today.js + last.js.
+    """Fetch A-share realtime snapshot from THS today.js + last.js.
 
     today.js field IDs are undocumented, so we read price/volume/amount with
     best-effort guards and recompute change_pct against the last completed
@@ -368,7 +368,7 @@ def _fetch_realtime_ths(code: str) -> dict:
                 "amount": _safe_float(node.get("19")),
             }
     except Exception as e:
-        _log(f"[{code}] 同花顺 today.js failed: {e}")
+        _log(f"[{code}] THS today.js failed: {e}")
 
     try:
         last = _ths_parse_jsonp(_ths_http_get(f"{base}last.js", timeout=10, retries=0))
@@ -397,21 +397,21 @@ def _fetch_realtime_ths(code: str) -> dict:
         if prev_close and prev_close > 0 and price:
             rt["change_pct"] = round((price - prev_close) / prev_close * 100, 2)
     except Exception as e:
-        _log(f"[{code}] 同花顺 last.js (realtime) failed: {e}")
+        _log(f"[{code}] THS last.js (realtime) failed: {e}")
     return rt
 
 
-# --- 同花顺官方 API (fuyao.aicubes.cn, 需 HITHINK_FINANCE_API_KEY, 兼容 FUYAO_API_KEY / THS_API_KEY) ---
+# --- THS Official API (fuyao.aicubes.cn, requires HITHINK_FINANCE_API_KEY, compatible with FUYAO_API_KEY / THS_API_KEY) ---
 #
-# 官方结构化金融数据 REST API：snake_case 字段、自带涨跌幅、支持前/后复权，
-# 并有估值(PE/PB/PS/PCF)、财务指标、标的检索等增强数据。仅覆盖 A 股。
-# 未配置 API Key 时所有函数直接跳过，不影响零配置降级链。
+# Official structured finance data REST API: snake_case fields, includes change percent, supports forward/backward adjustment,
+# also has valuation (PE/PB/PS/PCF), financial indicators, ticker search and other enhanced data. Only covers A-shares.
+# When API Key is not configured, all functions are skipped directly, not affecting the zero-config degradation chain.
 
 def _ths_api_key() -> str:
-    """同花顺官方 API Key。
+    """THS Official API Key.
 
-    官方推荐变量名 HITHINK_FINANCE_API_KEY（REST/MCP/CLI/Python 四端共用）；
-    FUYAO_API_KEY / THS_API_KEY 作为兼容别名保留。
+    Official recommended variable name HITHINK_FINANCE_API_KEY (shared by REST/MCP/CLI/Python four endpoints);
+    FUYAO_API_KEY / THS_API_KEY kept as compatible aliases.
     """
     return (
         os.environ.get("HITHINK_FINANCE_API_KEY")
@@ -422,7 +422,7 @@ def _ths_api_key() -> str:
 
 
 def _fuyao_get(path: str, params: dict = None) -> dict:
-    """GET 同花顺官方 API，携带 X-api-key 鉴权，返回 ApiResponse 信封。"""
+    """GET THS Official API, carries X-api-key authentication, returns ApiResponse envelope."""
     import json as _json
     import urllib.parse
     import urllib.request
@@ -442,7 +442,7 @@ def _fuyao_get(path: str, params: dict = None) -> dict:
 
 
 def _fuyao_thscode(code: str) -> str:
-    """A股纯代码 -> 完整 thscode（600519 -> 600519.SH，920xxx -> 920xxx.BJ）。"""
+    """A-share pure code -> complete thscode (600519 -> 600519.SH, 920xxx -> 920xxx.BJ)."""
     if code.startswith(("600", "601", "603", "605", "688", "689", "51", "52", "56", "58")):
         return f"{code}.SH"
     if code.startswith(("43", "83", "87", "88", "92")):
@@ -451,9 +451,9 @@ def _fuyao_thscode(code: str) -> str:
 
 
 def _fetch_fuyao_a(code: str, days: int) -> tuple:
-    """A股历史 K 线 via 同花顺官方 API（前复权，字段自带官方语义）。
+    """A-share historical K-line via THS Official API (forward-adjusted, fields have official semantics).
 
-    返回 (ohlcv, source)。窗口跨度由脚本按 days 推算，官方上限 10 年。
+    Returns (ohlcv, source). Window span calculated by script based on days, official limit 10 years.
     """
     end_ms = int(datetime.now().timestamp() * 1000)
     start_ms = int((datetime.now() - timedelta(days=days * 2)).timestamp() * 1000)
@@ -465,7 +465,7 @@ def _fetch_fuyao_a(code: str, days: int) -> tuple:
         "adjust": "forward",
     })
     if resp.get("code") != 0:
-        raise ValueError(f"同花顺官方API: {resp.get('message')}")
+        raise ValueError(f"THS Official API: {resp.get('message')}")
     items = (resp.get("data") or {}).get("item") or []
     bars = []
     for it in items:
@@ -484,24 +484,24 @@ def _fetch_fuyao_a(code: str, days: int) -> tuple:
             "pct_chg": None,
         })
     if not bars:
-        raise ValueError(f"同花顺官方API returned no data for {code}")
+        raise ValueError(f"THS Official API returned no data for {code}")
     bars.sort(key=lambda b: b["date"])
     for i in range(1, len(bars)):
         prev, curr = bars[i - 1]["close"], bars[i]["close"]
         if prev and curr and prev > 0:
             bars[i]["pct_chg"] = round((curr - prev) / prev * 100, 2)
-    _log(f"[{code}] Using 同花顺官方API (前复权, {len(bars)} bars)")
+    _log(f"[{code}] Using THS Official API (forward-adjusted, {len(bars)} bars)")
     return bars[-days:], "ths_api"
 
 
 def _fetch_realtime_fuyao(code: str) -> dict:
-    """A股实时行情 + 估值 via 同花顺官方 API（快照自带官方涨跌幅）。
+    """A-share real-time quotes + valuation via THS Official API (snapshot includes official change percent).
 
-    行情快照不含中文名与估值，故再调一次估值快照补充 name / PE / PB / PS / PCF。
+    Quote snapshot does not include Chinese name and valuation, so call valuation snapshot again to supplement name / PE / PB / PS / PCF.
     """
     resp = _fuyao_get("/api/a-share/prices/snapshot", {"thscodes": _fuyao_thscode(code)})
     if resp.get("code") != 0:
-        raise ValueError(f"同花顺官方API snapshot: {resp.get('message')}")
+        raise ValueError(f"THS Official API snapshot: {resp.get('message')}")
     items = (resp.get("data") or {}).get("item") or []
     if not items:
         return {}
@@ -532,9 +532,9 @@ def _fetch_realtime_fuyao(code: str) -> dict:
 
 
 def _search_fuyao(query: str) -> list:
-    """同花顺官方标的检索：按 thscode / ticker / 中文名解析标准标的。
+    """THS official ticker search: parse standard tickers by thscode / ticker / Chinese name.
 
-    返回 [{"thscode", "ticker", "name", "market", ...}]；解析失败返回空列表。
+    Returns [{"thscode", "ticker", "name", "market", ...}]; parse failure returns null list.
     """
     resp = _fuyao_get("/api/meta/tickers/search", {"q": query})
     if resp.get("code") != 0:
@@ -545,7 +545,7 @@ def _search_fuyao(query: str) -> list:
 # --- akshare (Priority 3, free) ---
 
 def _fetch_akshare_a(code: str, days: int):
-    """Fetch A-share via akshare (qfq 前复权). 失败直接抛错交由降级链，绝不降级为不复权。"""
+    """Fetch A-share via akshare (qfq forward-adjusted). Failure immediately throws error to degradation chain, never degrades to non-adjusted."""
     import akshare as ak
     end_date = datetime.now().strftime("%Y%m%d")
     start_date = (datetime.now() - timedelta(days=days * 2)).strftime("%Y%m%d")
@@ -554,19 +554,19 @@ def _fetch_akshare_a(code: str, days: int):
     if df is None or df.empty:
         raise ValueError(f"akshare returned no data for {code}")
     col_map = {
-        "日期": "date", "开盘": "open", "收盘": "close",
-        "最高": "high", "最低": "low", "成交量": "volume",
-        "成交额": "amount", "涨跌幅": "pct_chg",
+        "date": "date", "open": "open", "close": "close",
+        "high": "high", "low": "low", "volume": "volume",
+        "turnover": "amount", "change percent": "pct_chg",
     }
     df = df.rename(columns=col_map)
-    _log(f"[{code}] Using akshare (qfq 前复权)")
+    _log(f"[{code}] Using akshare (qfq forward-adjusted)")
     return _df_to_ohlcv(df, days), "akshare"
 
 
 
 
 def _fetch_akshare_hk(code: str, days: int):
-    """Fetch HK stock via akshare (qfq 前复权). 失败直接抛错交由降级链，绝不降级为不复权。"""
+    """Fetch HK stock via akshare (qfq forward-adjusted). Failure immediately throws error to degradation chain, never degrades to non-adjusted."""
     import akshare as ak
     end_date = datetime.now().strftime("%Y%m%d")
     start_date = (datetime.now() - timedelta(days=days * 2)).strftime("%Y%m%d")
@@ -575,12 +575,12 @@ def _fetch_akshare_hk(code: str, days: int):
     if df is None or df.empty:
         raise ValueError(f"akshare returned no data for HK{code}")
     col_map = {
-        "日期": "date", "开盘": "open", "收盘": "close",
-        "最高": "high", "最低": "low", "成交量": "volume",
-        "成交额": "amount", "涨跌幅": "pct_chg",
+        "date": "date", "open": "open", "close": "close",
+        "high": "high", "low": "low", "volume": "volume",
+        "turnover": "amount", "change percent": "pct_chg",
     }
     df = df.rename(columns=col_map)
-    _log(f"[HK{code}] Using akshare (qfq 前复权)")
+    _log(f"[HK{code}] Using akshare (qfq forward-adjusted)")
     return _df_to_ohlcv(df, days), "akshare"
 
 
@@ -591,7 +591,7 @@ def _fetch_yfinance(code: str, market: str, days: int):
     import yfinance as yf
     yf_code = to_yfinance_code(code, market)
     ticker = yf.Ticker(yf_code)
-    # auto_adjust=True: 前复权口径，与 A股 qfq 链路统一（旧版 yfinance 默认 False，必须显式）
+    # auto_adjust=True: forward-adjusted caliber, unified with A-share qfq chain (old version yfinance defaults to False, must be explicit)
     hist = ticker.history(period=f"{days}d", auto_adjust=True)
     if hist is None or hist.empty:
         raise ValueError(f"yfinance returned no data for {yf_code}")
@@ -619,13 +619,13 @@ def _fetch_yfinance(code: str, market: str, days: int):
     return ohlcv, "yfinance"
 
 
-# --- 腾讯行情 (free, zero-dependency via stdlib, 国内直连稳定) ---
+# --- Tencent Finance (free, zero-dependency via stdlib, stable domestic connection) ---
 #
-# 覆盖 港股/美股 K线(fqkline) 与实时报价(qt.gtimg.cn)。国内网络下东方财富
-# (efinance/akshare)连接常被重置、Yahoo(yfinance)对大陆 IP 常见持续 429，
-# 腾讯接口是国内可直连的稳定兜底。K线行格式为
-# [date, open, close, high, low, volume, ...]（注意 OCLH 顺序，非 OHLC）；
-# 实时报价为 GBK 编码、`~` 分隔的字段串。无鉴权、无官方配额说明，请控制频率。
+# Covers HK/US K-line (fqkline) and real-time quotes (qt.gtimg.cn). Under domestic network, East Money
+# (efinance/akshare) connections are often reset, Yahoo (yfinance) correctly blocks mainland IPs with persistent 429,
+# Tencent interface is a stable fallback that can be directly connected domestically. K-line row format is
+# [date, open, close, high, low, volume, ...] (note OCLH order, not OHLC);
+# Real-time quotes are GBK encoded, `~`-delimited field strings. No authentication, no official quota statement, please control frequency.
 
 _QQ_US_SYMBOL_CACHE = {}
 
@@ -720,10 +720,10 @@ def _fetch_qq_us(code: str, days: int):
 def _parse_qt_quote(body: str) -> dict:
     """Parse a qt.gtimg.cn realtime quote line (GBK, `~`-separated fields).
 
-    Field layout (classic gtimg): 1=名称 3=现价 4=昨收 5=今开 6=成交量(手)
-    31=涨跌额 32=涨跌% 33=最高 34=最低 37=成交额(万) 38=换手率 39=市盈率
-    44=流通市值(亿) 45=总市值(亿) 46=市净率 — 港美股部分字段可能为空。
-    市值字段 ×1e8 换算为原币绝对值，与 efinance/yfinance 口径对齐。
+    Field layout (classic gtimg): 1=name 3=current price 4=previous close 5=today open 6=volume (lots)
+    31=change amount 32=change% 33=high 34=low 37=turnover (10k) 38=turnover rate 39=P/E ratio
+    44=circulating market cap (100M) 45=total market cap (100M) 46=P/B ratio — HK/US some fields may be null.
+    Market cap fields ×1e8 converted to original currency absolute value, consistent with efinance/yfinance caliber.
     """
     import re
     m = re.search(r'="([^"]*)"', body)
@@ -772,7 +772,7 @@ def _fetch_realtime_qt(symbol: str) -> dict:
 
 def _fetch_realtime_a(code: str) -> dict:
     """Fetch A-share realtime quote with fallback."""
-    # Try 同花顺官方 API first (fastest, official fields + valuation; needs key)
+    # Try THS Official API first (fastest, official fields + valuation; needs key)
     if _ths_api_key():
         try:
             rt = _fetch_realtime_fuyao(code)
@@ -785,27 +785,27 @@ def _fetch_realtime_a(code: str) -> dict:
         try:
             import akshare as ak
             spot_df = ak.stock_zh_a_spot_em()
-            row = spot_df[spot_df["代码"] == code]
+            row = spot_df[spot_df["code"] == code]
             if not row.empty:
                 r = row.iloc[0]
                 return {
-                    "name": str(r.get("名称", code)),
-                    "price": _safe_float(r.get("最新价")),
-                    "change_pct": _safe_float(r.get("涨跌幅")),
-                    "change_amount": _safe_float(r.get("涨跌额")),
-                    "volume": _safe_float(r.get("成交量")),
-                    "amount": _safe_float(r.get("成交额")),
-                    "amplitude": _safe_float(r.get("振幅")),
-                    "turnover_rate": _safe_float(r.get("换手率")),
-                    "pe_ratio": _safe_float(r.get("市盈率-动态")),
-                    "pb_ratio": _safe_float(r.get("市净率")),
-                    "total_mv": _safe_float(r.get("总市值")),
-                    "circ_mv": _safe_float(r.get("流通市值")),
-                    "high": _safe_float(r.get("最高")),
-                    "low": _safe_float(r.get("最低")),
-                    "open": _safe_float(r.get("今开")),
-                    "pre_close": _safe_float(r.get("昨收")),
-                    "volume_ratio": _safe_float(r.get("量比")),
+                    "name": str(r.get("name", code)),
+                    "price": _safe_float(r.get("latest price")),
+                    "change_pct": _safe_float(r.get("change percent")),
+                    "change_amount": _safe_float(r.get("change amount")),
+                    "volume": _safe_float(r.get("volume")),
+                    "amount": _safe_float(r.get("turnover")),
+                    "amplitude": _safe_float(r.get("amplitude")),
+                    "turnover_rate": _safe_float(r.get("turnover rate")),
+                    "pe_ratio": _safe_float(r.get("P/E ratio - dynamic")),
+                    "pb_ratio": _safe_float(r.get("P/B ratio")),
+                    "total_mv": _safe_float(r.get("total market cap")),
+                    "circ_mv": _safe_float(r.get("circulating market cap")),
+                    "high": _safe_float(r.get("high")),
+                    "low": _safe_float(r.get("low")),
+                    "open": _safe_float(r.get("today open")),
+                    "pre_close": _safe_float(r.get("previous close")),
+                    "volume_ratio": _safe_float(r.get("volume ratio")),
                 }
         except Exception:
             pass
@@ -817,13 +817,13 @@ def _fetch_realtime_a(code: str) -> dict:
             if qt is not None and not qt.empty:
                 r = qt.iloc[0]
                 return {
-                    "name": str(r.get("股票名称", code)),
-                    "price": _safe_float(r.get("最新价")),
-                    "change_pct": _safe_float(r.get("涨跌幅")),
+                    "name": str(r.get("stock name", code)),
+                    "price": _safe_float(r.get("latest price")),
+                    "change_pct": _safe_float(r.get("change percent")),
                 }
         except Exception:
             pass
-    # Try 同花顺 (free, stdlib-only; works when EastMoney endpoints are blocked)
+    # Try THS (free, stdlib-only; works when EastMoney endpoints are blocked)
     try:
         rt = _fetch_realtime_ths(code)
         if rt.get("price"):
@@ -858,10 +858,10 @@ def _fetch_realtime_a(code: str) -> dict:
 def _fetch_realtime_hk(code: str) -> dict:
     """Fetch HK realtime quote.
 
-    降级链与 fetch_hk 的历史行情保持一致：efinance → akshare → yfinance。
-    efinance.get_latest_quote 按单只代码取快照（含名称/涨跌幅/最高最低/PE/市值），
-    比 akshare 的港股全市场快照(stock_hk_spot_em，一次拉全部代码且易被限流)更稳，
-    故排在第一位。各源失败均写日志（不再静默 pass 后返回空 dict）。
+    Degradation chain consistent with fetch_hk historical quotes: efinance → akshare → yfinance.
+    efinance.get_latest_quote fetches snapshot by single ticker (includes name/change percent/high low/PE/market cap),
+    more stable than akshare HK full market snapshot (stock_hk_spot_em, fetches all tickers at once and easily rate-limited),
+    so ranked first. Each source failure writes log (no longer silently pass and return null dict).
     """
     # Priority 1: efinance (single-code snapshot, rich fields)
     if _check_source("efinance"):
@@ -871,56 +871,56 @@ def _fetch_realtime_hk(code: str) -> dict:
             if qt is not None and not qt.empty:
                 r = qt.iloc[0]
                 rt = {
-                    "name": str(r.get("名称", f"HK{code}")),
-                    "price": _safe_float(r.get("最新价")),
-                    "change_pct": _safe_float(r.get("涨跌幅")),
-                    "change_amount": _safe_float(r.get("涨跌额")),
-                    "volume": _safe_float(r.get("成交量")),
-                    "amount": _safe_float(r.get("成交额")),
-                    "turnover_rate": _safe_float(r.get("换手率")),
-                    "volume_ratio": _safe_float(r.get("量比")),
-                    "pe_ratio": _safe_float(r.get("动态市盈率")),
-                    "total_mv": _safe_float(r.get("总市值")),
-                    "circ_mv": _safe_float(r.get("流通市值")),
-                    "high": _safe_float(r.get("最高")),
-                    "low": _safe_float(r.get("最低")),
-                    "open": _safe_float(r.get("今开")),
-                    "pre_close": _safe_float(r.get("昨日收盘")),
+                    "name": str(r.get("name", f"HK{code}")),
+                    "price": _safe_float(r.get("latest price")),
+                    "change_pct": _safe_float(r.get("change percent")),
+                    "change_amount": _safe_float(r.get("change amount")),
+                    "volume": _safe_float(r.get("volume")),
+                    "amount": _safe_float(r.get("turnover")),
+                    "turnover_rate": _safe_float(r.get("turnover rate")),
+                    "volume_ratio": _safe_float(r.get("volume ratio")),
+                    "pe_ratio": _safe_float(r.get("dynamic P/E ratio")),
+                    "total_mv": _safe_float(r.get("total market cap")),
+                    "circ_mv": _safe_float(r.get("circulating market cap")),
+                    "high": _safe_float(r.get("high")),
+                    "low": _safe_float(r.get("low")),
+                    "open": _safe_float(r.get("today open")),
+                    "pre_close": _safe_float(r.get("yesterdayclose")),
                     "realtime_source": "efinance",
                 }
                 if rt["price"]:
                     return rt
         except Exception as e:
-            _log(f"[HK{code}] efinance 实时快照失败: {e}")
+            _log(f"[HK{code}] efinance real-time snapshot failed: {e}")
 
-    # Priority 2: akshare 东方财富港股全市场快照
+    # Priority 2: akshare East Money HK full market snapshot
     if _check_source("akshare"):
         try:
             import akshare as ak
             spot_df = ak.stock_hk_spot_em()
-            matched = spot_df[spot_df["代码"] == code]
+            matched = spot_df[spot_df["code"] == code]
             if not matched.empty:
                 r = matched.iloc[0]
                 return {
-                    "name": str(r.get("名称", f"HK{code}")),
-                    "price": _safe_float(r.get("最新价")),
-                    "change_pct": _safe_float(r.get("涨跌幅")),
-                    "volume": _safe_float(r.get("成交量")),
-                    "pe_ratio": _safe_float(r.get("市盈率")),
-                    "pb_ratio": _safe_float(r.get("市净率")),
-                    "total_mv": _safe_float(r.get("总市值")),
+                    "name": str(r.get("name", f"HK{code}")),
+                    "price": _safe_float(r.get("latest price")),
+                    "change_pct": _safe_float(r.get("change percent")),
+                    "volume": _safe_float(r.get("volume")),
+                    "pe_ratio": _safe_float(r.get("P/E ratio")),
+                    "pb_ratio": _safe_float(r.get("P/B ratio")),
+                    "total_mv": _safe_float(r.get("total market cap")),
                     "realtime_source": "akshare",
                 }
         except Exception as e:
-            _log(f"[HK{code}] akshare 实时快照失败: {e}")
+            _log(f"[HK{code}] akshare real-time snapshot failed: {e}")
 
-    # Priority 2.5: 腾讯实时报价 (free, stdlib-only, 国内直连稳定)
+    # Priority 2.5: Tencent real-time quotes (free, stdlib-only, stable domestic connection)
     try:
         rt = _fetch_realtime_qt(f"hk{code}")
         if rt.get("price"):
             return rt
     except Exception as e:
-        _log(f"[HK{code}] tencent 实时快照失败: {e}")
+        _log(f"[HK{code}] tencent real-time snapshot failed: {e}")
 
     # Priority 3: yfinance (works when EastMoney endpoints are blocked)
     if _check_source("yfinance"):
@@ -945,12 +945,12 @@ def _fetch_realtime_hk(code: str) -> dict:
                     "realtime_source": "yfinance",
                 }
         except Exception as e:
-            _log(f"[HK{code}] yfinance 实时快照失败: {e}")
+            _log(f"[HK{code}] yfinance real-time snapshotfailure: {e}")
     return {}
 
 
 def _fetch_realtime_us(code: str) -> dict:
-    """Fetch US realtime quote: yfinance (fields richer) → tencent (国内直连稳定)."""
+    """Fetch US realtime quote: yfinance (fields richer) → tencent (stable domestic connection)."""
     try:
         import yfinance as yf
         info = yf.Ticker(code).info
@@ -976,35 +976,35 @@ def _fetch_realtime_us(code: str) -> dict:
                 "realtime_source": "yfinance",
             }
     except Exception as e:
-        _log(f"[{code}] yfinance 实时快照失败: {e}")
-    # 腾讯兜底 (free, stdlib-only, 国内直连稳定)
-    # 注意: 实时报价符号不带交易所后缀 (usTSLA), 带 .OQ/.N 反而查无此股;
-    # K线接口则相反, 必须带后缀 (见 _qq_us_symbol)。
+        _log(f"[{code}] yfinance real-time snapshotfailure: {e}")
+    # Tencent fallback (free, stdlib-only, stable domestic connection)
+    # Note: Real-time quote symbols do not have exchange suffix (usTSLA), adding .OQ/.N will cause ticker not found;
+    # K-line interface is the opposite, must have suffix (see _qq_us_symbol).
     try:
         rt = _fetch_realtime_qt(f"us{code}")
         if rt.get("price"):
             return rt
     except Exception as e:
-        _log(f"[{code}] tencent 实时快照失败: {e}")
+        _log(f"[{code}] tencent real-time snapshot failed: {e}")
     return {}
 
 
 # --- Priority router ---
 
-# 复权口径审计（2026-09 实测核验）: 降级链所有源统一为前复权(qfq)，
-# 任一源失败直接抛错切到下一源，绝不静默降级为不复权。
-# - tushare:   pro_bar(adj='qfq')          （pro.daily() 是不复权，已弃用）
-# - ths_api:   官方API adjust=forward 前复权
-# - efinance:  get_quote_history(fqt=1) 前复权
-# - ths:       d.10jqka.com.cn /01/ 段即前复权（与腾讯 qfq 逐点核对一致）
+# Adjustment caliber audit (2026-09 empirical verification): All sources in degradation chain use forward-adjusted (qfq),
+# if any source fails, immediately throw error and switch to next source, never silently degrade to non-adjusted.
+# - tushare:   pro_bar(adj='qfq')          (pro.daily() is non-adjusted, deprecated)
+# - ths_api:   Official API adjust=forward forward-adjusted
+# - efinance:  get_quote_history(fqt=1) forward-adjusted
+# - ths:       d.10jqka.com.cn /01/ 段即forward-adjusted（verified point-by-point against Tencent qfq）
 # - akshare:   stock_zh_a_hist / stock_hk_hist adjust='qfq'
 # - tencent:   fqkline param=...,qfq
 # - yfinance:  history(auto_adjust=True)
-_SOURCE_ADJUSTMENT = "qfq (前复权)"
+_SOURCE_ADJUSTMENT = "qfq (forward-adjusted)"
 
 
 def fetch_cn_a(code: str, days: int) -> dict:
-    """Fetch A-share with priority: Tushare > 同花顺官方API(有Key) > efinance > 同花顺 > akshare > yfinance."""
+    """Fetch A-share with priority: Tushare > THS Official API (with key) > efinance > THS > akshare > yfinance."""
     ohlcv = None
     source = "unknown"
     errors = []
@@ -1016,7 +1016,7 @@ def fetch_cn_a(code: str, days: int) -> dict:
         except Exception as e:
             errors.append(f"tushare: {e}")
 
-    # Priority 1: 同花顺官方 API (需 HITHINK_FINANCE_API_KEY, 前复权+结构化字段)
+    # Priority 1: THS Official API (requires HITHINK_FINANCE_API_KEY, forward-adjusted + structured fields)
     if ohlcv is None and _ths_api_key():
         try:
             ohlcv, source = _fetch_fuyao_a(code, days)
@@ -1030,7 +1030,7 @@ def fetch_cn_a(code: str, days: int) -> dict:
         except Exception as e:
             errors.append(f"efinance: {e}")
 
-    # Priority 3: 同花顺 (free, no pip dependency)
+    # Priority 3: THS (free, no pip dependency)
     if ohlcv is None:
         try:
             ohlcv, source = _fetch_ths_a(code, days)
@@ -1078,7 +1078,7 @@ def fetch_hk(code: str, days: int) -> dict:
         except Exception as e:
             errors.append(f"akshare: {e}")
 
-    # Priority 2.5: 腾讯 (free, stdlib-only, 国内直连稳定)
+    # Priority 2.5: Tencent (free, stdlib-only, stable domestic connection)
     if ohlcv is None:
         try:
             ohlcv, source = _fetch_qq_hk(code, days)
@@ -1096,7 +1096,7 @@ def fetch_hk(code: str, days: int) -> dict:
 
     realtime = _fetch_realtime_hk(code)
     if not realtime.get("price") and ohlcv:
-        # 所有实时源均失败 → 用最后一根日K兜底，保证看板仍有现价/涨跌幅（同 fetch_us）
+        # All real-time sources failed -> use last daily bar as fallback, ensuring dashboard still has current price/change percent (same as fetch_us)
         last = ohlcv[-1]
         realtime = {
             **realtime,
@@ -1112,12 +1112,12 @@ def fetch_hk(code: str, days: int) -> dict:
 
 
 def fetch_us(code: str, days: int) -> dict:
-    """Fetch US stock: tencent (国内直连稳定) → yfinance (fallback)."""
+    """Fetch US stock: tencent (stable domestic connection) -> yfinance (fallback)."""
     ohlcv = None
     source = "unknown"
     errors = []
 
-    # Priority 1: 腾讯 (free, stdlib-only, 国内直连稳定)
+    # Priority 1: Tencent (free, stdlib-only, stable domestic connection)
     try:
         ohlcv, source = _fetch_qq_us(code, days)
     except Exception as e:
@@ -1153,10 +1153,10 @@ def fetch_us(code: str, days: int) -> dict:
 # ============================================================
 
 def _fetch_news_akshare(code: str, max_results: int = 5) -> list:
-    """A股个股新闻 via akshare 东方财富(stock_news_em)。免费、无需 API Key。
+    """A-share individual stock news via akshare East Money (stock_news_em). Free, no API Key required.
 
-    返回 list of {"title", "content", "url", "date", "source", "publisher"}，
-    按发布时间倒序。仅支持 A 股六位代码。
+    Returns list of {"title", "content", "url", "date", "source", "publisher"},
+    Sorted by release time descending. Only supports A-share 6-digit codes.
     """
     import akshare as ak
     df = ak.stock_news_em(symbol=code)
@@ -1166,12 +1166,12 @@ def _fetch_news_akshare(code: str, max_results: int = 5) -> list:
     for _, r in df.iterrows():
         try:
             rows.append({
-                "title": str(r.get("新闻标题", "")).strip(),
-                "content": str(r.get("新闻内容", "")).strip().replace("\n", " ")[:200],
-                "url": str(r.get("新闻链接", "")).strip(),
-                "date": str(r.get("发布时间", "")).strip(),
+                "title": str(r.get("news title", "")).strip(),
+                "content": str(r.get("newscontent", "")).strip().replace("\n", " ")[:200],
+                "url": str(r.get("newslink", "")).strip(),
+                "date": str(r.get("releasetime", "")).strip(),
                 "source": "akshare-em",
-                "publisher": str(r.get("文章来源", "")).strip() or "东方财富",
+                "publisher": str(r.get("article source", "")).strip() or "East Money",
             })
         except Exception:
             continue
@@ -1182,16 +1182,16 @@ def _fetch_news_akshare(code: str, max_results: int = 5) -> list:
 def search_news(stock_name: str, code: str, max_results: int = 5, market: str = "cn_a") -> list:
     """
     Search news with priority:
-      A股: akshare 东方财富个股新闻 (free, no key) > Tavily > SerpAPI > empty
+      A-share: akshare East Moneyindividual stock news (free, no key) > Tavily > SerpAPI > empty
       HK/US: Tavily > SerpAPI > empty
     Returns list of {"title": ..., "content": ..., "url": ..., "date": ..., "source": ...}
     """
-    # Priority 0: akshare 东方财富个股新闻 (A股专属, 免费无 Key)
+    # Priority 0: akshare East Money individual stock news (A-share exclusive, free, no key)
     if market == "cn_a" and _check_source("akshare"):
         try:
             results = _fetch_news_akshare(code, max_results)
             if results:
-                _log(f"[{code}] News via akshare/东方财富 ({len(results)} results)")
+                _log(f"[{code}] News via akshare/East Money ({len(results)} results)")
                 return results
         except Exception as e:
             _log(f"[{code}] akshare news failed: {e}")
@@ -1240,7 +1240,7 @@ def search_news(stock_name: str, code: str, max_results: int = 5, market: str = 
                     "title": r.get("title", ""),
                     "content": r.get("snippet", "") or r.get("body", "")[:200],
                     "url": r.get("link", ""),
-                    "date": r.get("date"),  # Google News: 相对时间串如 "3 days ago"
+                    "date": r.get("date"),  # Google News: relative time string like "3 days ago"
                     "source": "serpapi",
                 })
             if results:
@@ -1249,7 +1249,7 @@ def search_news(stock_name: str, code: str, max_results: int = 5, market: str = 
         except Exception as e:
             _log(f"[{code}] SerpAPI failed: {e}")
 
-    # No news source available — return empty, let Claude use WebSearch
+    # No news source available - return empty, let Claude use WebSearch
     _log(f"[{code}] No news source available, skipping (Claude will use WebSearch)")
     return []
 
@@ -1260,13 +1260,13 @@ def _parse_news_date(raw):
     """Parse a news date string into ISO 'YYYY-MM-DD' (or None).
 
     Handles absolute formats, ISO with timezone, and relative strings from
-    Google News/Tavily ("3 days ago", "x小时前", "昨天"...).
+    Google News/Tavily ("3 days ago", "x hours ago", "yesterday"...).
     """
     if not raw:
         return None
     raw = str(raw).strip()
     fmts = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d",
-            "%Y/%m/%d %H:%M:%S", "%Y/%m/%d", "%Y年%m月%d日 %H:%M", "%Y年%m月%d日")
+            "%Y/%m/%d %H:%M:%S", "%Y/%m/%d", "%Y-%m-%d %H:%M", "%Y-%m-%d")
     for f in fmts:
         try:
             return datetime.strptime(raw, f).strftime("%Y-%m-%d")
@@ -1291,48 +1291,48 @@ def _parse_news_date(raw):
             if unit.startswith(k):
                 return (now - v).strftime("%Y-%m-%d")
         return None
-    # relative Chinese: "3天前", "12小时前", "2个月前" ...
-    m = re.search(r"(\d+)\s*(分钟|小时|天|周|个月|月)前", raw)
+    # relative Chinese: "3 days ago", "12 hours ago", "2 months ago" ...
+    m = re.search(r"(\d+)\s*(minute|hour|day|week|month|month) ago", raw)
     if m:
         num, unit = int(m.group(1)), m.group(2)
-        delta = {"分钟": timedelta(minutes=num), "小时": timedelta(hours=num),
-                 "天": timedelta(days=num), "周": timedelta(weeks=num),
-                 "个月": timedelta(days=30 * num), "月": timedelta(days=30 * num)}
+        delta = {"minute": timedelta(minutes=num), "hour": timedelta(hours=num),
+                 "day": timedelta(days=num), "week": timedelta(weeks=num),
+                 "month": timedelta(days=30 * num), "month": timedelta(days=30 * num)}
         return (now - delta[unit]).strftime("%Y-%m-%d")
-    if "yesterday" in raw.lower() or "昨天" in raw:
+    if "yesterday" in raw.lower() or "yesterday" in raw:
         return (now - timedelta(days=1)).strftime("%Y-%m-%d")
-    if "today" in raw.lower() or "今天" in raw:
+    if "today" in raw.lower() or "today" in raw:
         return now.strftime("%Y-%m-%d")
     return None
 
 
 _NEWS_POSITIVE = [
-    "利好", "预增", "净利增长", "净利润增长", "同比增长", "超预期", "新高",
-    "中标", "中选", "签订", "签约", "重大合同", "回购", "增持", "分红", "派息",
-    "派现", "上调", "获批", "合作", "扩产", "涨价", "提价", "扭亏", "盈利",
+    "positive", "pre-profit increase", "net profit growth", "net profit growth", "year-over-year growth", "beat expectations", "new high",
+    "win bid", "selected", "signed", "signed", "major contract", "buyback", "increase holding", "dividend", "dividend",
+    "cash dividend", "upgrade", "approved", "cooperation", "capacity expansion", "price increase", "price increase", "turn loss to profit", "profit",
 ]
 _NEWS_NEGATIVE = [
-    "利空", "预亏", "首亏", "亏损", "净利下滑", "净利润下降", "同比下降",
-    "低于预期", "减持", "拟减持", "清仓", "解禁", "质押", "冻结", "处罚",
-    "罚款", "立案", "调查", "警示函", "监管函", "违规", "违法", "诉讼", "仲裁",
-    "商誉减值", "计提减值", "退市", "做空", "下调", "终止", "失败", "辞职",
-    "离职", "被查", "问询",
+    "negative", "pre-loss", "first loss", "loss", "net profit decline", "net profit decline", "year-over-year decline",
+    "below expectations", "reduce holding", "plan to reduce", "liquidate", "unlock", "pledge", "freeze", "penalty",
+    "fine", "case filed", "investigation", "warning letter", "regulatory letter", "violation", "illegal", "lawsuit", "arbitration",
+    "goodwill impairment", "impairment provision", "delisting", "market maker", "downgrade", "terminate", "failure", "resignation",
+    "departure", "under investigation", "inquiry",
 ]
 _MAJOR_RISK_KEYWORDS = [
-    "立案", "调查", "退市", "处罚", "违规", "违法", "商誉减值", "预亏",
-    "质押", "冻结", "做空", "问询",
+    "case filed", "investigation", "delisting", "penalty", "violation", "illegal", "goodwill impairment", "pre-loss",
+    "pledge", "freeze", "market maker", "inquiry",
 ]
 _NEWS_EVENT_RULES = [
-    ("regulatory", ["处罚", "罚款", "立案", "调查", "警示函", "监管函", "违规",
-                    "违法", "问询", "诉讼", "仲裁", "退市"]),
-    ("shareholder_selling", ["减持", "清仓", "解禁", "质押"]),
-    ("buyback_holding", ["回购", "增持"]),
-    ("dividend", ["分红", "派息", "除权", "除息", "派现"]),
-    ("earnings", ["预增", "预亏", "季报", "年报", "中报", "业绩", "净利",
-                  "净利润", "扭亏", "亏损"]),
-    ("ma_restructuring", ["收购", "并购", "重组", "借壳", "定增", "募资"]),
-    ("contracts_growth", ["中标", "中选", "签订", "签约", "订单", "合作",
-                          "扩产", "涨价", "提价", "获批"]),
+    ("regulatory", ["penalty", "fine", "case filed", "investigation", "warning letter", "regulatory letter", "violation",
+                    "illegal", "inquiry", "lawsuit", "arbitration", "delisting"]),
+    ("shareholder_selling", ["reduce holding", "liquidate", "unlock", "pledge"]),
+    ("buyback_holding", ["buyback", "increase holding"]),
+    ("dividend", ["dividend", "dividend", "ex-rights", "ex-dividend", "cash dividend"]),
+    ("earnings", ["pre-profit increase", "pre-loss", "quarterly report", "annual report", "interim report", "performance", "net profit",
+                  "net profit", "turn loss to profit", "loss"]),
+    ("ma_restructuring", ["acquisition", "merger", "restructuring", "backdoor listing", "private placement", "fundraising"]),
+    ("contracts_growth", ["win bid", "selected", "signed", "signed", "orders", "cooperation",
+                          "capacity expansion", "price increase", "price increase", "approved"]),
 ]
 
 
@@ -1596,11 +1596,11 @@ def calc_pullback_context(closes: list, ma_data: dict) -> dict:
     "low RSI / shrink pullback" is NOT blindly treated as oversold opportunity.
 
     Distinguishes:
-    - uptrend_pullback:  上升趋势中的回调（价格在MA60上方、多头排列、
-                         从近期高点浅幅回落）→ 缩量回调/低RSI才可信
-    - downtrend_decline: 下跌趋势中的阴跌（空头排列或价格在MA60下方且
-                         持续走低）→ 低RSI是趋势走弱，不是超卖机会
-    - range_swing:       区间震荡
+    - uptrend_pullback:  pullback in uptrend (price above MA60, bullish alignment,
+                         shallow decline from recent high) -> volume-contraction pullback/low RSI is credible
+    - downtrend_decline: decline in downtrend (bearish alignment or price below MA60 and
+                         continuously falling) -> low RSI indicates weak trend, not oversold opportunity
+    - range_swing:       Range swing
     """
     if len(closes) < 25:
         return {"phase": "insufficient_data"}
@@ -1671,10 +1671,10 @@ def calc_atr(bars: list, period: int = 14):
 def calc_risk_levels(valid_bars: list, closes: list, ma_data: dict) -> dict:
     """Volatility-aware stop/target levels with R:R, so the AI cannot hallucinate prices.
 
-    - stop: 结构位(MA20/20日低点)优先，但用 ATR 加缓冲并限制在
-      [现价-3ATR, 现价-1ATR] 区间内；无结构位时用现价-2ATR
-    - target: 近60日高点(阻力位)，且至少现价+3ATR
-    - rr_ratio = (target-close)/(close-stop)，<1.5 的买点在信号层被硬性拦截
+    - stop: structural level (MA20/20-day low) prioritized, but use ATR to add buffer and limit within
+      within [current price-3ATR, current price-1ATR] range; use current price-2ATR when no structural level
+    - target: recent 60-day high (resistance level), and at least current price+3ATR
+    - rr_ratio = (target-close)/(close-stop), <1.5 buy points are hard-blocked at signal layer
     """
     out = {"atr": None, "atr_pct": None, "ann_vol_pct": None,
            "stop_structural": None, "stop_suggested": None,
@@ -1731,9 +1731,9 @@ def calc_risk_levels(valid_bars: list, closes: list, ma_data: dict) -> dict:
 
 
 _BENCHMARKS = {
-    "cn_a": ("sh000300", "沪深300"),
-    "cn_hk": ("hkHSI", "恒生指数"),
-    "us": ("SPY", "标普500(SPY)"),
+    "cn_a": ("sh000300", "CSI 300"),
+    "cn_hk": ("hkHSI", "Hang Seng Index"),
+    "us": ("SPY", "S&P 500(SPY)"),
 }
 _BENCH_CACHE = {}
 
@@ -1806,10 +1806,10 @@ def calc_relative_strength(market: str, closes: list, bench_closes) -> dict:
 
 
 def calc_tradability(realtime: dict, code: str, name: str = "") -> dict:
-    """A股涨跌停状态与买入可执行性（涨停买不进，跌停止损卖不出；T+1）。
+    """A-share limit status and buy executability (cannot buy at limit up, cannot sell stop-loss at limit down; T+1).
 
-    板块阈值: 科创板(688/689)与创业板(300/301/302) 20%，北交所(43/83/87/88/92) 30%，
-    ST 5%，主板 10%。港/美无涨跌停限制 → not_applicable。
+    Sector thresholds: STAR Market (688/689) and ChiNext (300/301/302) 20%, BSE (43/83/87/88/92) 30%,
+    ST 5%, Main Board 10%. HK/US no limit restriction -> not_applicable.
     """
     chg = realtime.get("change_pct")
     if not (isinstance(code, str) and len(code) == 6 and code.isdigit()):
@@ -1838,7 +1838,7 @@ def calc_tradability(realtime: dict, code: str, name: str = "") -> dict:
 
 
 def fetch_upcoming_unlocks(code: str, within_days: int = 60) -> list:
-    """A股限售解禁 upcoming events via akshare (best-effort, 非致命).
+    """A-share lock-up unlock upcoming events via akshare (best-effort, non-fatal).
 
     Returns list of {"date": "YYYY-MM-DD", "pct_of_float": float|None, "detail": str}
     sorted by date, only events within [today, today+within_days]. [] on any failure.
@@ -1863,10 +1863,10 @@ def fetch_upcoming_unlocks(code: str, within_days: int = 60) -> list:
         out = []
         try:
             date_col = next((c for c in df.columns
-                             if "日期" in str(c) or "时间" in str(c)), None)
+                             if "date" in str(c) or "time" in str(c)), None)
             ratio_col = next((c for c in df.columns
-                              if "比例" in str(c) or "%" in str(c)), None)
-            qty_col = next((c for c in df.columns if "数量" in str(c)), None)
+                              if "ratio" in str(c) or "%" in str(c)), None)
+            qty_col = next((c for c in df.columns if "quantity" in str(c)), None)
             if date_col is None:
                 continue
             for _, r in df.iterrows():
@@ -1927,7 +1927,7 @@ def calc_volume_analysis(volumes: list, closes: list) -> dict:
 
 
 def calc_bias(closes: list, ma_data: dict) -> dict:
-    """Calculate bias ratio (乖离率)."""
+    """Calculate bias ratio (bias ratio)."""
     if not closes:
         return {}
     curr = closes[-1]
@@ -1970,7 +1970,7 @@ def calc_trend_score(ma_data: dict, macd_data: dict, rsi_data: dict,
     """
     Composite scoring system (100 points total):
     - Trend/MA alignment: 26 pts
-    - Bias (乖离率): 20 pts
+    - Bias (bias ratio): 20 points
     - Volume: 15 pts
     - MACD: 15 pts
     - RSI: 10 pts
@@ -1979,7 +1979,7 @@ def calc_trend_score(ma_data: dict, macd_data: dict, rsi_data: dict,
 
     Phase-aware: pullback context (calc_pullback_context) downgrades
     "shrink pullback / low RSI / below-MA5 bias" rewards when the stock is in
-    a downtrend — those patterns are only buy signals inside an uptrend.
+    a downtrend - those patterns are only buy signals inside an uptrend.
 
     Buy gates (hard): downtrend_decline phase, or risk/reward ratio < 1.5
     (context["rr_ratio"], from calc_risk_levels) — blocked from buy signals.
@@ -1998,7 +1998,7 @@ def calc_trend_score(ma_data: dict, macd_data: dict, rsi_data: dict,
     }
     breakdown["trend"] = trend_scores.get(alignment, 10)
 
-    # 2. Bias score (20 pts) - prefer slightly below MA5, but only in uptrend
+    # 2. Bias score (20 points) - prefer slightly below MA5, but only in uptrend
     bias_ma5 = bias_data.get("bias_ma5", 0)
     if in_downtrend:
         # In a downtrend, sitting below MA5 = continuing weakness, not a dip
@@ -2033,7 +2033,7 @@ def calc_trend_score(ma_data: dict, macd_data: dict, rsi_data: dict,
             breakdown["bias"] = 6   # Far below
 
     # 3. Volume score (15 pts) - shrink pullback only counts in an uptrend;
-    #    in a downtrend, shrink price-drop is 阴跌 (bleeding), not 回调 (pullback)
+    #    in a downtrend, shrink price-drop is decline (bleeding), not pullback
     vol_trend = vol_data.get("trend", "normal")
     if in_downtrend:
         vol_scores = {
@@ -2074,7 +2074,7 @@ def calc_trend_score(ma_data: dict, macd_data: dict, rsi_data: dict,
         }
     breakdown["rsi"] = rsi_scores.get(rsi_zone, 5)
 
-    # 6. Relative Strength score (4 pts) vs benchmark (沪深300/恒指/SPY)
+    # 6. Relative Strength score (4 pts) vs benchmark (CSI 300/Hang Seng Index/SPY)
     #    context["rs_60d"] = stock 60d return minus benchmark 60d return (pct)
     rs60 = context.get("rs_60d")
     if rs60 is None:
@@ -2116,13 +2116,13 @@ def calc_trend_score(ma_data: dict, macd_data: dict, rsi_data: dict,
     if rr is not None and rr < 1.5:
         buy_gates.append(f"rr_ratio={rr} < 1.5: risk/reward not justified")
     if limit_status == "limit_up":
-        buy_gates.append("limit_up: 涨停封板，今日买入不可执行（T+1）")
+        buy_gates.append("limit_up: limit up sealed, buy not executable today (T+1)")
     if unlock_pct is not None and unlock_pct >= 5:
-        buy_gates.append(f"upcoming unlock {unlock_pct}% of float within 30d: 大额解禁")
+        buy_gates.append(f"upcoming unlock {unlock_pct}% of float within 30d: large unlock")
     if limit_status == "limit_down":
-        warnings.append("limit_down: 跌停，止损单今日可能无法成交")
+        warnings.append("limit_down: limit down, stop-loss order may not fill today")
     elif limit_status == "near_limit_down":
-        warnings.append("near_limit_down: 接近跌停，注意止损滑点")
+        warnings.append("near_limit_down: Near limit down, watch for stop-loss slippage")
     if unlock_pct is not None and 3 <= unlock_pct < 5:
         warnings.append(f"upcoming unlock {unlock_pct}% of float within 30d")
     buy_blocked = bool(buy_gates)
@@ -2143,8 +2143,8 @@ def calc_trend_score(ma_data: dict, macd_data: dict, rsi_data: dict,
         signal = "sell"
 
     signal_cn = {
-        "strong_buy": "强烈买入", "buy": "买入", "hold": "持有",
-        "wait": "观望", "sell": "卖出", "strong_sell": "强烈卖出",
+        "strong_buy": "Strong Buy", "buy": "Buy", "hold": "Hold",
+        "wait": "Wait", "sell": "Sell", "strong_sell": "Strong Sell",
     }
 
     return {
@@ -2165,19 +2165,19 @@ def analyze_stock(code: str, days: int = 120, fetch_news: bool = False) -> dict:
     """Full analysis pipeline for a single stock."""
     market, normalized, display = classify_stock(code)
 
-    # 中文公司名解析：优先用同花顺官方标的检索消歧（需 HITHINK_FINANCE_API_KEY）
+    # Chinese company name parsing: prioritize THS official ticker search for disambiguation (requires HITHINK_FINANCE_API_KEY)
     if market == "unknown" and _ths_api_key():
         try:
             hits = _search_fuyao(code)
-            a_share = [h for h in hits if h.get("market") == "A股" or str(h.get("thscode", "")).endswith((".SH", ".SZ", ".BJ"))]
+            a_share = [h for h in hits if h.get("market") == "A-share" or str(h.get("thscode", "")).endswith((".SH", ".SZ", ".BJ"))]
             if a_share:
                 thscode = a_share[0]["thscode"]
                 normalized = thscode.rsplit(".", 1)[0]
                 market = "cn_a"
                 display = normalized
-                _log(f"[{code}] 同花顺官方API解析为 {thscode} ({a_share[0].get('name', '')})")
+                _log(f"[{code}] THS Official API parsed as {thscode} ({a_share[0].get('name', '')})")
         except Exception as e:
-            _log(f"[{code}] 同花顺官方API标的检索失败: {e}")
+            _log(f"[{code}] THS Official API ticker search failure: {e}")
 
     if market == "unknown":
         raise ValueError(f"Cannot classify stock code: {code}")
@@ -2194,9 +2194,9 @@ def analyze_stock(code: str, days: int = 120, fetch_news: bool = False) -> dict:
     if not ohlcv or len(ohlcv) < 10:
         raise ValueError(f"Insufficient data for {code}: only {len(ohlcv)} bars")
 
-    # 日期对齐: closes/volumes/recent_bars 必须派生自同一份有效 bar 序列。
-    # 之前分别压缩 close 与 volume 会导致指标窗口横跨非连续交易日、
-    # 且指标与 recent_bars 的日期错位。
+    # Date alignment: closes/volumes/recent_bars must be derived from the same valid bar sequence.
+    # Previously compressing close and volume separately caused indicator windows to span non-consecutive trading days,
+    # and misaligned dates between indicators and recent_bars.
     valid_bars = [b for b in ohlcv if b.get("close") is not None]
     closes = [b["close"] for b in valid_bars]
     volumes = [b.get("volume") for b in valid_bars]
@@ -2216,7 +2216,7 @@ def analyze_stock(code: str, days: int = 120, fetch_news: bool = False) -> dict:
     context = calc_pullback_context(closes, ma)
     # Volatility-aware stop/target with R:R (ATR-based, feeds buy gate)
     risk = calc_risk_levels(valid_bars, closes, ma)
-    # A股微观结构: 涨跌停状态（影响买入可执行性）+ 临近解禁事件（best-effort）
+    # A-share micro structure: limit status (affects buy executability) + upcoming unlock events (best-effort)
     tradability = calc_tradability(raw.get("realtime", {}), normalized, raw.get("name", ""))
     unlocks = fetch_upcoming_unlocks(normalized, 60) if market == "cn_a" else []
     unlock_pct_30d = None
@@ -2239,7 +2239,7 @@ def analyze_stock(code: str, days: int = 120, fetch_news: bool = False) -> dict:
     context["unlock_pct_30d"] = unlock_pct_30d
     score = calc_trend_score(ma, macd, rsi, vol, bias, support, context)
 
-    # News search (optional) — structured: dates + time-decayed sentiment
+    # News search (optional) - structured: dates + time-decayed sentiment
     news = []
     news_summary = None
     if fetch_news:
@@ -2268,8 +2268,8 @@ def analyze_stock(code: str, days: int = 120, fetch_news: bool = False) -> dict:
         },
         "events": {"upcoming_unlocks": unlocks, "unlock_pct_30d": unlock_pct_30d},
         "trend_score": score,
-        "recent_bars": valid_bars[-10:],  # 与指标输入同一序列，日期严格对齐
-        "as_of": valid_bars[-1].get("date"),  # 指标计算截止日
+        "recent_bars": valid_bars[-10:],  # same sequence as indicators input, dates strictly aligned
+        "as_of": valid_bars[-1].get("date"),  # Indicator calculation cutoff date
         "adjustment": raw.get("adjustment", "unknown"),
         "total_bars": len(ohlcv),
         "fetch_time": datetime.now().isoformat(),
@@ -2629,7 +2629,7 @@ def main():
     parser = argparse.ArgumentParser(description="Stock Data Fetcher")
     parser.add_argument("--stocks", required=True, help="Comma-separated stock codes")
     parser.add_argument("--days", type=int, default=120, help="History trading days")
-    parser.add_argument("--news", action="store_true", help="Also search news (A股 via akshare/东方财富 free; HK/US needs TAVILY_API_KEY or SERPAPI_KEY)")
+    parser.add_argument("--news", action="store_true", help="Also search news (A-share via akshare/East Money free; HK/US needs TAVILY_API_KEY or SERPAPI_KEY)")
     parser.add_argument("--backtest", action="store_true", help="Run backtest calibration (walks through historical data, generates signals, tracks forward returns)")
     parser.add_argument("--backtest-days", type=int, default=252, help="Backtest lookback window in trading days (default 252)")
     parser.add_argument("--forward-days", type=str, default="5,10,20", help="Forward return horizons in trading days (comma-separated)")
@@ -2649,7 +2649,7 @@ def main():
     sources_status["tavily_api"] = "configured" if os.environ.get("TAVILY_API_KEY") else "not set"
     sources_status["serpapi"] = "configured" if os.environ.get("SERPAPI_KEY") else "not set"
     sources_status["news"] = (
-        "akshare-em (A股个股新闻, free)"
+        "akshare-em (A-shareindividual stock news, free)"
         if _check_source("akshare")
         else ("tavily" if os.environ.get("TAVILY_API_KEY")
               else ("serpapi" if os.environ.get("SERPAPI_KEY") else "none"))
