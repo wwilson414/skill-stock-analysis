@@ -1,0 +1,773 @@
+{
+ "generated_at": "2026-09-08T13:32:55",
+ "elapsed_s": 8.0,
+ "args": {
+  "universe": "fixed",
+  "seed": 42,
+  "pool_size": 300,
+  "sample_n": 30,
+  "codes": "",
+  "limit": 0,
+  "days": 900,
+  "bench_bars": 1200,
+  "forward_days": "5,10,20",
+  "bootstrap": 1000,
+  "parallel": 6,
+  "out": "reports/p1_signal_results.json",
+  "no_cache": false
+ },
+ "universe": {
+  "rule": "fixed frozen list: 36 liquid large/mid caps listed <= 2023-01-01, 12 A-main + 6 ChiNext + 4 STAR + 6 HK + 8 US, >= 10 sectors; selected from major index constituents before the run, never filtered on realized 2024-2026 price paths (residual famous-name survivorship bias acknowledged; cross-check with --universe random)",
+  "meta": {}
+ },
+ "p1_5": {
+  "horizon": "fwd20",
+  "by_phase": {
+   "downtrend_decline": {
+    "n": 13752,
+    "mom": {
+     "n": 13752,
+     "ic": -0.0662,
+     "t_stat": -7.78,
+     "p_value": 0.0,
+     "ci95": [
+      -0.084,
+      -0.0482
+     ],
+     "ci_includes_zero": false,
+     "mean_fwd": 1.512,
+     "win_rate": 53.2
+    },
+    "mr_score": {
+     "n": 13752,
+     "ic": 0.0342,
+     "t_stat": 4.013,
+     "p_value": 6e-05,
+     "ci95": [
+      0.0167,
+      0.0525
+     ],
+     "ci_includes_zero": false,
+     "mean_fwd": 1.512,
+     "win_rate": 53.2
+    },
+    "c_rsi": {
+     "n": 13752,
+     "ic": -0.0054,
+     "t_stat": -0.633,
+     "p_value": 0.52659,
+     "ci95": [
+      -0.0239,
+      0.0126
+     ],
+     "ci_includes_zero": true,
+     "mean_fwd": 1.512,
+     "win_rate": 53.2
+    },
+    "c_dev": {
+     "n": 13752,
+     "ic": 0.0858,
+     "t_stat": 10.098,
+     "p_value": 0.0,
+     "ci95": [
+      0.0691,
+      0.1033
+     ],
+     "ci_includes_zero": false,
+     "mean_fwd": 1.512,
+     "win_rate": 53.2
+    },
+    "c_stop": {
+     "n": 13752,
+     "ic": null
+    }
+   },
+   "range_swing": {
+    "n": 6029,
+    "mom": {
+     "n": 6029,
+     "ic": -0.009,
+     "t_stat": -0.699,
+     "p_value": 0.48472,
+     "ci95": [
+      -0.0372,
+      0.0191
+     ],
+     "ci_includes_zero": true,
+     "mean_fwd": 1.008,
+     "win_rate": 52.4
+    },
+    "mr_score": {
+     "n": 6029,
+     "ic": -0.0165,
+     "t_stat": -1.281,
+     "p_value": 0.20015,
+     "ci95": [
+      -0.0455,
+      0.0091
+     ],
+     "ci_includes_zero": true,
+     "mean_fwd": 1.008,
+     "win_rate": 52.4
+    },
+    "c_rsi": {
+     "n": 6029,
+     "ic": -0.0048,
+     "t_stat": -0.373,
+     "p_value": 0.70941,
+     "ci95": [
+      -0.0323,
+      0.0201
+     ],
+     "ci_includes_zero": true,
+     "mean_fwd": 1.008,
+     "win_rate": 52.4
+    },
+    "c_dev": {
+     "n": 6029,
+     "ic": -0.0276,
+     "t_stat": -2.144,
+     "p_value": 0.03207,
+     "ci95": [
+      -0.0589,
+      0.0018
+     ],
+     "ci_includes_zero": true,
+     "mean_fwd": 1.008,
+     "win_rate": 52.4
+    },
+    "c_stop": {
+     "n": 6029,
+     "ic": null
+    }
+   },
+   "uptrend_pullback": {
+    "n": 9695,
+    "mom": {
+     "n": 9695,
+     "ic": 0.0119,
+     "t_stat": 1.172,
+     "p_value": 0.24133,
+     "ci95": [
+      -0.0086,
+      0.0315
+     ],
+     "ci_includes_zero": true,
+     "mean_fwd": 0.857,
+     "win_rate": 51.6
+    },
+    "mr_score": {
+     "n": 9695,
+     "ic": 0.017,
+     "t_stat": 1.674,
+     "p_value": 0.09414,
+     "ci95": [
+      -0.0019,
+      0.0369
+     ],
+     "ci_includes_zero": true,
+     "mean_fwd": 0.857,
+     "win_rate": 51.6
+    },
+    "c_rsi": {
+     "n": 9695,
+     "ic": 0.0034,
+     "t_stat": 0.335,
+     "p_value": 0.73782,
+     "ci95": [
+      -0.0141,
+      0.0216
+     ],
+     "ci_includes_zero": true,
+     "mean_fwd": 0.857,
+     "win_rate": 51.6
+    },
+    "c_dev": {
+     "n": 9695,
+     "ic": 0.0343,
+     "t_stat": 3.379,
+     "p_value": 0.00073,
+     "ci95": [
+      0.0123,
+      0.0599
+     ],
+     "ci_includes_zero": false,
+     "mean_fwd": 0.857,
+     "win_rate": 51.6
+    },
+    "c_stop": {
+     "n": 9695,
+     "ic": null
+    }
+   }
+  },
+  "by_market_x_phase": {
+   "cn_a|downtrend_decline": {
+    "n": 9009,
+    "mr_score": {
+     "n": 9009,
+     "ic": 0.0329,
+     "t_stat": 3.124,
+     "p_value": 0.00178,
+     "ci95": [
+      0.0105,
+      0.0536
+     ],
+     "ci_includes_zero": false,
+     "mean_fwd": 1.375,
+     "win_rate": 51.2
+    }
+   },
+   "cn_a|range_swing": {
+    "n": 3770,
+    "mr_score": {
+     "n": 3770,
+     "ic": -0.0175,
+     "t_stat": -1.074,
+     "p_value": 0.28265,
+     "ci95": [
+      -0.0489,
+      0.0161
+     ],
+     "ci_includes_zero": true,
+     "mean_fwd": 0.977,
+     "win_rate": 50.5
+    }
+   },
+   "cn_a|uptrend_pullback": {
+    "n": 5231,
+    "mr_score": {
+     "n": 5231,
+     "ic": 0.0227,
+     "t_stat": 1.642,
+     "p_value": 0.10061,
+     "ci95": [
+      -0.0042,
+      0.048
+     ],
+     "ci_includes_zero": true,
+     "mean_fwd": 0.541,
+     "win_rate": 46.4
+    }
+   },
+   "cn_hk|downtrend_decline": {
+    "n": 2278,
+    "mr_score": {
+     "n": 2278,
+     "ic": 0.0463,
+     "t_stat": 2.211,
+     "p_value": 0.02702,
+     "ci95": [
+      0.0032,
+      0.0892
+     ],
+     "ci_includes_zero": false,
+     "mean_fwd": 1.048,
+     "win_rate": 52.5
+    }
+   },
+   "cn_hk|range_swing": {
+    "n": 1048,
+    "mr_score": {
+     "n": 1048,
+     "ic": -0.0699,
+     "t_stat": -2.266,
+     "p_value": 0.02344,
+     "ci95": [
+      -0.1398,
+      -0.0003
+     ],
+     "ci_includes_zero": false,
+     "mean_fwd": 0.263,
+     "win_rate": 49.3
+    }
+   },
+   "cn_hk|uptrend_pullback": {
+    "n": 1588,
+    "mr_score": {
+     "n": 1588,
+     "ic": 0.0297,
+     "t_stat": 1.183,
+     "p_value": 0.23669,
+     "ci95": [
+      -0.0206,
+      0.0772
+     ],
+     "ci_includes_zero": true,
+     "mean_fwd": 0.6,
+     "win_rate": 52.5
+    }
+   },
+   "us|downtrend_decline": {
+    "n": 2465,
+    "mr_score": {
+     "n": 2465,
+     "ic": 0.0491,
+     "t_stat": 2.44,
+     "p_value": 0.0147,
+     "ci95": [
+      0.0095,
+      0.0911
+     ],
+     "ci_includes_zero": false,
+     "mean_fwd": 2.439,
+     "win_rate": 61.3
+    }
+   },
+   "us|range_swing": {
+    "n": 1211,
+    "mr_score": {
+     "n": 1211,
+     "ic": 0.0621,
+     "t_stat": 2.163,
+     "p_value": 0.03051,
+     "ci95": [
+      -0.0008,
+      0.1199
+     ],
+     "ci_includes_zero": true,
+     "mean_fwd": 1.75,
+     "win_rate": 61.0
+    }
+   },
+   "us|uptrend_pullback": {
+    "n": 2876,
+    "mr_score": {
+     "n": 2876,
+     "ic": -0.0056,
+     "t_stat": -0.3,
+     "p_value": 0.76401,
+     "ci95": [
+      -0.0411,
+      0.0299
+     ],
+     "ci_includes_zero": true,
+     "mean_fwd": 1.572,
+     "win_rate": 60.8
+    }
+   }
+  },
+  "acceptance": {
+   "criterion": "downtrend_decline mr_score IC > 0 and bootstrap CI low > 0",
+   "ic": 0.0342,
+   "ci95": [
+    0.0167,
+    0.0525
+   ],
+   "n": 13752,
+   "passed": true
+  },
+  "event_study": {
+   "fwd5": {
+    "baseline": {
+     "n": 13752,
+     "mean": 0.335,
+     "median": 0.132,
+     "win": 51.2
+    },
+    "event": {
+     "n": 27,
+     "mean": -1.443,
+     "median": -2.155,
+     "win": 33.3
+    }
+   },
+   "fwd10": {
+    "baseline": {
+     "n": 13752,
+     "mean": 0.723,
+     "median": 0.298,
+     "win": 52.1
+    },
+    "event": {
+     "n": 27,
+     "mean": -1.219,
+     "median": -2.145,
+     "win": 37.0
+    }
+   },
+   "fwd20": {
+    "baseline": {
+     "n": 13752,
+     "mean": 1.512,
+     "median": 0.622,
+     "win": 53.2
+    },
+    "event": {
+     "n": 27,
+     "mean": -2.169,
+     "median": -1.922,
+     "win": 25.9
+    }
+   },
+   "event_by_market_fwd20": {
+    "cn_a": {
+     "n": 18,
+     "mean": -1.413,
+     "median": -1.678,
+     "win": 27.8
+    },
+    "cn_hk": {
+     "n": 6,
+     "mean": -5.212,
+     "median": -7.896,
+     "win": 16.7
+    },
+    "us": {
+     "n": 3,
+     "mean": -0.62,
+     "median": -0.903,
+     "win": 33.3
+    }
+   },
+   "n_events_total": 27,
+   "n_downtrend_total": 13752
+  },
+  "cross_section_dt": {
+   "n_stocks": 36,
+   "n_valid": 36,
+   "mean": 0.0672,
+   "median": 0.0524,
+   "pct_negative": 13.9,
+   "se": 0.0122,
+   "t_stat": 5.502,
+   "p_value": 0.0
+  }
+ },
+ "p1_6": {
+  "horizon": "fwd20",
+  "pooled_nondowntrend": {
+   "comp_vol": {
+    "n": 15724,
+    "ic": 0.046,
+    "t_stat": 5.774,
+    "p_value": 0.0,
+    "ci95": [
+     0.0249,
+     0.0666
+    ],
+    "ci_includes_zero": false,
+    "mean_fwd": 0.915,
+    "win_rate": 51.9
+   },
+   "comp_pv": {
+    "n": 15724,
+    "ic": -0.0405,
+    "t_stat": -5.082,
+    "p_value": 0.0,
+    "ci95": [
+     -0.0607,
+     -0.0197
+    ],
+    "ci_includes_zero": false,
+    "mean_fwd": 0.915,
+    "win_rate": 51.9
+   },
+   "comp_brk": {
+    "n": 15724,
+    "ic": 0.0182,
+    "t_stat": 2.282,
+    "p_value": 0.02246,
+    "ci95": [
+     -0.0054,
+     0.0408
+    ],
+    "ci_includes_zero": true,
+    "mean_fwd": 0.915,
+    "win_rate": 51.9
+   },
+   "comp_gap": {
+    "n": 15724,
+    "ic": -0.0138,
+    "t_stat": -1.731,
+    "p_value": 0.08354,
+    "ci95": [
+     -0.0348,
+     0.0083
+    ],
+    "ci_includes_zero": true,
+    "mean_fwd": 0.915,
+    "win_rate": 51.9
+   }
+  },
+  "chosen": [
+   "comp_vol"
+  ],
+  "combo_note": "components with non-downtrend IC CI lower bound > 0; equal-weight sum, no refitting",
+  "combo_by_phase": {
+   "__all__": {
+    "n": 29476,
+    "ic": 0.048,
+    "t_stat": 8.25,
+    "p_value": 0.0,
+    "ci95": [
+     0.034,
+     0.062
+    ],
+    "ci_includes_zero": false,
+    "mean_fwd": 1.193,
+    "win_rate": 52.5
+   },
+   "downtrend_decline": {
+    "n": 13752,
+    "ic": 0.0542,
+    "t_stat": 6.365,
+    "p_value": 0.0,
+    "ci95": [
+     0.0373,
+     0.0717
+    ],
+    "ci_includes_zero": false,
+    "mean_fwd": 1.512,
+    "win_rate": 53.2
+   },
+   "range_swing": {
+    "n": 6029,
+    "ic": 0.0403,
+    "t_stat": 3.131,
+    "p_value": 0.00174,
+    "ci95": [
+     0.0097,
+     0.0717
+    ],
+    "ci_includes_zero": false,
+    "mean_fwd": 1.008,
+    "win_rate": 52.4
+   },
+   "uptrend_pullback": {
+    "n": 9695,
+    "ic": 0.0504,
+    "t_stat": 4.968,
+    "p_value": 0.0,
+    "ci95": [
+     0.0241,
+     0.0801
+    ],
+    "ci_includes_zero": false,
+    "mean_fwd": 0.857,
+    "win_rate": 51.6
+   }
+  }
+ },
+ "p1_8": {
+  "horizon": "fwd20",
+  "momentum_ic_variants": {
+   "__all__": {
+    "n": 29476,
+    "raw": {
+     "n": 29476,
+     "ic": -0.0405,
+     "t_stat": -6.959,
+     "p_value": 0.0,
+     "ci95": [
+      -0.0514,
+      -0.0289
+     ],
+     "ci_includes_zero": false,
+     "mean_fwd": 1.193,
+     "win_rate": 52.5
+    },
+    "excess": {
+     "n": 29476,
+     "ic": -0.0315,
+     "t_stat": -5.411,
+     "p_value": 0.0,
+     "ci95": [
+      -0.0426,
+      -0.0203
+     ],
+     "ci_includes_zero": false,
+     "mean_fwd": 0.43,
+     "win_rate": 49.2
+    },
+    "atr_norm": {
+     "n": 29476,
+     "ic": -0.009,
+     "t_stat": -1.545,
+     "p_value": 0.1223,
+     "ci95": [
+      -0.0196,
+      0.0027
+     ],
+     "ci_includes_zero": true,
+     "mean_fwd": 0.115,
+     "win_rate": 52.5
+    }
+   },
+   "downtrend_decline": {
+    "n": 13752,
+    "raw": {
+     "n": 13752,
+     "ic": -0.0662,
+     "t_stat": -7.78,
+     "p_value": 0.0,
+     "ci95": [
+      -0.084,
+      -0.0482
+     ],
+     "ci_includes_zero": false,
+     "mean_fwd": 1.512,
+     "win_rate": 53.2
+    },
+    "excess": {
+     "n": 13752,
+     "ic": -0.0326,
+     "t_stat": -3.825,
+     "p_value": 0.00013,
+     "ci95": [
+      -0.0496,
+      -0.0152
+     ],
+     "ci_includes_zero": false,
+     "mean_fwd": 0.688,
+     "win_rate": 50.0
+    },
+    "atr_norm": {
+     "n": 13752,
+     "ic": -0.0373,
+     "t_stat": -4.377,
+     "p_value": 1e-05,
+     "ci95": [
+      -0.0554,
+      -0.0203
+     ],
+     "ci_includes_zero": false,
+     "mean_fwd": 0.117,
+     "win_rate": 53.2
+    }
+   },
+   "range_swing": {
+    "n": 6029,
+    "raw": {
+     "n": 6029,
+     "ic": -0.009,
+     "t_stat": -0.699,
+     "p_value": 0.48472,
+     "ci95": [
+      -0.0372,
+      0.0191
+     ],
+     "ci_includes_zero": true,
+     "mean_fwd": 1.008,
+     "win_rate": 52.4
+    },
+    "excess": {
+     "n": 6029,
+     "ic": -0.0124,
+     "t_stat": -0.963,
+     "p_value": 0.33568,
+     "ci95": [
+      -0.0406,
+      0.0158
+     ],
+     "ci_includes_zero": true,
+     "mean_fwd": 0.343,
+     "win_rate": 49.5
+    },
+    "atr_norm": {
+     "n": 6029,
+     "ic": 0.0025,
+     "t_stat": 0.194,
+     "p_value": 0.84611,
+     "ci95": [
+      -0.0228,
+      0.028
+     ],
+     "ci_includes_zero": true,
+     "mean_fwd": 0.11,
+     "win_rate": 52.4
+    }
+   },
+   "uptrend_pullback": {
+    "n": 9695,
+    "raw": {
+     "n": 9695,
+     "ic": 0.0119,
+     "t_stat": 1.172,
+     "p_value": 0.24133,
+     "ci95": [
+      -0.0086,
+      0.0315
+     ],
+     "ci_includes_zero": true,
+     "mean_fwd": 0.857,
+     "win_rate": 51.6
+    },
+    "excess": {
+     "n": 9695,
+     "ic": 0.0059,
+     "t_stat": 0.581,
+     "p_value": 0.56132,
+     "ci95": [
+      -0.0144,
+      0.0249
+     ],
+     "ci_includes_zero": true,
+     "mean_fwd": 0.116,
+     "win_rate": 47.9
+    },
+    "atr_norm": {
+     "n": 9695,
+     "ic": 0.0133,
+     "t_stat": 1.31,
+     "p_value": 0.19035,
+     "ci95": [
+      -0.0053,
+      0.0318
+     ],
+     "ci_includes_zero": true,
+     "mean_fwd": 0.114,
+     "win_rate": 51.6
+    }
+   }
+  },
+  "nonoverlap_20d_momentum": {
+   "step": 20,
+   "n": 1476,
+   "by_phase": {
+    "downtrend_decline": {
+     "n": 694,
+     "ic": -0.0154,
+     "t_stat": -0.405,
+     "p_value": 0.68536,
+     "ci95": [
+      -0.0995,
+      0.0606
+     ],
+     "ci_includes_zero": true,
+     "mean_fwd": 1.683,
+     "win_rate": 54.3
+    },
+    "range_swing": {
+     "n": 301,
+     "ic": 0.0393,
+     "t_stat": 0.68,
+     "p_value": 0.49645,
+     "ci95": [
+      -0.0608,
+      0.1368
+     ],
+     "ci_includes_zero": true,
+     "mean_fwd": 0.764,
+     "win_rate": 50.8
+    },
+    "uptrend_pullback": {
+     "n": 481,
+     "ic": 0.0018,
+     "t_stat": 0.039,
+     "p_value": 0.96858,
+     "ci95": [
+      -0.0943,
+      0.0986
+     ],
+     "ci_includes_zero": true,
+     "mean_fwd": 0.839,
+     "win_rate": 50.7
+    }
+   }
+  }
+ },
+ "n_stocks_ok": 36,
+ "n_stocks_total": 36,
+ "n_signals": 29476
+}

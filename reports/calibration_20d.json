@@ -1,0 +1,424 @@
+{
+ "generated_at": "2026-09-08T13:35:25",
+ "input": "reports/signals_p0_fixed.json",
+ "horizon_days": 20,
+ "n_pairs": 29476,
+ "train": {
+  "n": 18146,
+  "date_end": "2025-04-29"
+ },
+ "out_of_time": {
+  "n": 11330,
+  "date_start": "2025-04-29",
+  "date_end": "2026-08-11"
+ },
+ "binned_table": {
+  "bin_w": 5.0,
+  "min_bin_n": 30,
+  "bins_filled": 16,
+  "rows": [
+   {
+    "lo": 5,
+    "hi": 10.0,
+    "n": 28,
+    "p_up": null,
+    "mean_fwd": null
+   },
+   {
+    "lo": 10,
+    "hi": 15.0,
+    "n": 202,
+    "p_up": 0.6881,
+    "mean_fwd": 6.52,
+    "win_lb95": 0.6242
+   },
+   {
+    "lo": 15,
+    "hi": 20.0,
+    "n": 696,
+    "p_up": 0.5905,
+    "mean_fwd": 3.862,
+    "win_lb95": 0.554
+   },
+   {
+    "lo": 20,
+    "hi": 25.0,
+    "n": 1152,
+    "p_up": 0.5521,
+    "mean_fwd": 2.382,
+    "win_lb95": 0.5234
+   },
+   {
+    "lo": 25,
+    "hi": 30.0,
+    "n": 1224,
+    "p_up": 0.527,
+    "mean_fwd": 1.829,
+    "win_lb95": 0.499
+   },
+   {
+    "lo": 30,
+    "hi": 35.0,
+    "n": 1185,
+    "p_up": 0.5224,
+    "mean_fwd": 1.151,
+    "win_lb95": 0.4939
+   },
+   {
+    "lo": 35,
+    "hi": 40.0,
+    "n": 1456,
+    "p_up": 0.524,
+    "mean_fwd": 1.458,
+    "win_lb95": 0.4984
+   },
+   {
+    "lo": 40,
+    "hi": 45.0,
+    "n": 1257,
+    "p_up": 0.4932,
+    "mean_fwd": 0.675,
+    "win_lb95": 0.4656
+   },
+   {
+    "lo": 45,
+    "hi": 50.0,
+    "n": 1193,
+    "p_up": 0.5172,
+    "mean_fwd": 1.118,
+    "win_lb95": 0.4888
+   },
+   {
+    "lo": 50,
+    "hi": 55.0,
+    "n": 1188,
+    "p_up": 0.4933,
+    "mean_fwd": 0.462,
+    "win_lb95": 0.4648
+   },
+   {
+    "lo": 55,
+    "hi": 60.0,
+    "n": 1246,
+    "p_up": 0.4968,
+    "mean_fwd": 0.728,
+    "win_lb95": 0.469
+   },
+   {
+    "lo": 60,
+    "hi": 65.0,
+    "n": 1380,
+    "p_up": 0.508,
+    "mean_fwd": 0.928,
+    "win_lb95": 0.4816
+   },
+   {
+    "lo": 65,
+    "hi": 70.0,
+    "n": 1410,
+    "p_up": 0.4801,
+    "mean_fwd": 0.758,
+    "win_lb95": 0.4541
+   },
+   {
+    "lo": 70,
+    "hi": 75.0,
+    "n": 1706,
+    "p_up": 0.517,
+    "mean_fwd": 0.797,
+    "win_lb95": 0.4933
+   },
+   {
+    "lo": 75,
+    "hi": 80.0,
+    "n": 1453,
+    "p_up": 0.521,
+    "mean_fwd": 0.704,
+    "win_lb95": 0.4953
+   },
+   {
+    "lo": 80,
+    "hi": 85.0,
+    "n": 1132,
+    "p_up": 0.5168,
+    "mean_fwd": 0.814,
+    "win_lb95": 0.4877
+   },
+   {
+    "lo": 85,
+    "hi": 90.0,
+    "n": 230,
+    "p_up": 0.4957,
+    "mean_fwd": 0.83,
+    "win_lb95": 0.431
+   },
+   {
+    "lo": 90,
+    "hi": 95.0,
+    "n": 8,
+    "p_up": null,
+    "mean_fwd": null
+   }
+  ]
+ },
+ "isotonic": {
+  "sign_flipped": true,
+  "train_spearman": -0.0406,
+  "points": [
+   [
+    -93.0,
+    0.0
+   ],
+   [
+    -93.0,
+    0.0
+   ],
+   [
+    -93.0,
+    0.0
+   ],
+   [
+    -89.0,
+    0.1765
+   ],
+   [
+    -88.0,
+    0.2857
+   ],
+   [
+    -88.0,
+    0.5
+   ],
+   [
+    -81.0,
+    0.5017
+   ],
+   [
+    -41.0,
+    0.5041
+   ],
+   [
+    -29.0,
+    0.5183
+   ],
+   [
+    -24.0,
+    0.5405
+   ],
+   [
+    -22.0,
+    0.5416
+   ],
+   [
+    -22.0,
+    0.5667
+   ],
+   [
+    -19.0,
+    0.5793
+   ],
+   [
+    -17.0,
+    0.5815
+   ],
+   [
+    -16.0,
+    0.6202
+   ],
+   [
+    -13.0,
+    0.6538
+   ],
+   [
+    -10.0,
+    0.6972
+   ],
+   [
+    -7.0,
+    0.7143
+   ],
+   [
+    -7.0,
+    0.7778
+   ],
+   [
+    -7.0,
+    1.0
+   ],
+   [
+    -7.0,
+    1.0
+   ]
+  ]
+ },
+ "logistic": {
+  "w": [
+   -0.01824,
+   -0.05711,
+   0.08892
+  ],
+  "z_mean": 51.456,
+  "z_sd": 20.026,
+  "form": "p = sigmoid(w0 + w1*z + w2*z^2), z=(score-mu)/sd"
+ },
+ "evaluation": {
+  "oot_base_rate_p_up": 0.5378,
+  "brier_train_binned": 0.24884,
+  "brier_oot_binned": 0.24911,
+  "brier_train_isotonic": 0.24901,
+  "brier_oot_isotonic": 0.24984,
+  "brier_train_logistic": 0.24902,
+  "brier_oot_logistic": 0.24918,
+  "brier_baseline_constant_base_rate": 0.24857,
+  "reliability_oot_isotonic": [
+   {
+    "n": 2266,
+    "mean_pred": 0.4977,
+    "realized_p_up": 0.5102
+   },
+   {
+    "n": 2266,
+    "mean_pred": 0.5017,
+    "realized_p_up": 0.5265
+   },
+   {
+    "n": 2266,
+    "mean_pred": 0.5017,
+    "realized_p_up": 0.5525
+   },
+   {
+    "n": 2266,
+    "mean_pred": 0.5032,
+    "realized_p_up": 0.5649
+   },
+   {
+    "n": 2266,
+    "mean_pred": 0.54,
+    "realized_p_up": 0.5349
+   }
+  ],
+  "reliability_oot_logistic": [
+   {
+    "n": 2266,
+    "mean_pred": 0.4942,
+    "realized_p_up": 0.5181
+   },
+   {
+    "n": 2266,
+    "mean_pred": 0.4995,
+    "realized_p_up": 0.5441
+   },
+   {
+    "n": 2266,
+    "mean_pred": 0.5083,
+    "realized_p_up": 0.5437
+   },
+   {
+    "n": 2266,
+    "mean_pred": 0.5214,
+    "realized_p_up": 0.5375
+   },
+   {
+    "n": 2266,
+    "mean_pred": 0.5548,
+    "realized_p_up": 0.5455
+   }
+  ]
+ },
+ "threshold_table": {
+  "all": {
+   "75+": {
+    "n": 4771,
+    "p_up": 0.5309,
+    "mean_fwd": 0.969,
+    "median_fwd": 0.532
+   },
+   "60-75": {
+    "n": 7648,
+    "p_up": 0.5178,
+    "mean_fwd": 0.914,
+    "median_fwd": 0.323
+   },
+   "45-60": {
+    "n": 5747,
+    "p_up": 0.5104,
+    "mean_fwd": 0.864,
+    "median_fwd": 0.224
+   },
+   "30-45": {
+    "n": 6297,
+    "p_up": 0.5179,
+    "mean_fwd": 1.122,
+    "median_fwd": 0.336
+   },
+   "0-30": {
+    "n": 5013,
+    "p_up": 0.5581,
+    "mean_fwd": 2.299,
+    "median_fwd": 1.114
+   }
+  },
+  "downtrend": {
+   "75+": {
+    "n": 0
+   },
+   "60-75": {
+    "n": 95,
+    "p_up": 0.5474,
+    "mean_fwd": 0.565,
+    "median_fwd": 0.733
+   },
+   "45-60": {
+    "n": 2676,
+    "p_up": 0.5146,
+    "mean_fwd": 0.965,
+    "median_fwd": 0.287
+   },
+   "30-45": {
+    "n": 5984,
+    "p_up": 0.5177,
+    "mean_fwd": 1.108,
+    "median_fwd": 0.333
+   },
+   "0-30": {
+    "n": 4997,
+    "p_up": 0.5583,
+    "mean_fwd": 2.306,
+    "median_fwd": 1.115
+   }
+  },
+  "non_downtrend": {
+   "75+": {
+    "n": 4771,
+    "p_up": 0.5309,
+    "mean_fwd": 0.969,
+    "median_fwd": 0.532
+   },
+   "60-75": {
+    "n": 7553,
+    "p_up": 0.5174,
+    "mean_fwd": 0.919,
+    "median_fwd": 0.319
+   },
+   "45-60": {
+    "n": 3071,
+    "p_up": 0.5067,
+    "mean_fwd": 0.776,
+    "median_fwd": 0.173
+   },
+   "30-45": {
+    "n": 313,
+    "p_up": 0.5208,
+    "mean_fwd": 1.384,
+    "median_fwd": 0.567
+   },
+   "0-30": {
+    "n": 16,
+    "p_up": 0.5,
+    "mean_fwd": 0.325,
+    "median_fwd": -0.105
+   }
+  }
+ },
+ "usage_note": "binned_table maps score -> empirical P(fwd>0)/mean fwd on the train window (calibration, NOT a strategy return forecast); isotonic/logistic are compact monotone/quadratic variants. Evaluation is on the out-of-time tail. Flat reliability slopes mean the score carries no probability information at this horizon — do not trade off it."
+}
