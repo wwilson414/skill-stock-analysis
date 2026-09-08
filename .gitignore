@@ -6,3 +6,7 @@ __pycache__/
 # Local secrets / env
 .env
 *.local
+
+# P0 harness local data cache + raw signal dumps (too big for git)
+references/.p0_cache/
+reports/signals_*.json

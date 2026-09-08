@@ -2400,10 +2400,15 @@ def compute_signal_from_ohlcv(bars: list, benchmark_closes: list = None,
 
 def backtest_stock(code: str, days: int = 252, forward_days: list = None,
                    ohlcv_data: list = None, bench_closes: list = None,
-                   weights: dict = None) -> dict:
+                   weights: dict = None, return_signals: bool = False) -> dict:
     """
     Walk through historical data day-by-day, generate signals at each point,
     and track forward returns for calibration.
+
+    return_signals: when True, the returned calib dict also carries the raw
+    per-signal records ("signals") so research harnesses (e.g. the P0
+    evidence-expansion harness) can pool/segment them beyond the built-in
+    aggregations. Default False keeps the original shape.
     """
     if forward_days is None:
         forward_days = [5, 10, 20]
@@ -2469,6 +2474,8 @@ def backtest_stock(code: str, days: int = 252, forward_days: list = None,
     calib["total_signals"] = len(signals)
     calib["lookback_bars"] = _MIN_BARS_FOR_INDICATORS
     calib["forward_days"] = forward_days
+    if return_signals:
+        calib["signals"] = signals
     return calib
 
 
