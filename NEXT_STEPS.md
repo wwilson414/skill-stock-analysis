@@ -1,0 +1,166 @@
+# Stock-Analysis Skill — 执行交接文档
+>
+> 最后更新：2026-09-09
+> 当前阶段：P0–P3 已完成，P4 已立项待执行
+>
+---
+>
+## 1. 已完成阶段速览
+>
+| 阶段 | 状态 | 核心结论 | 关键产物 |
+|---|---|---|---|
+| P0 扩大证据 | ✅ | 负 IC 是结构性缺陷（阶段依赖），非窗口伪影 | `p0_backtest.py`, `reports/p0_expansion.json` |
+| P1 信号质量 | ✅ | mr_score 下跌段 IC+0.034；comp_vol 非下跌段 IC+0.046；总分无概率信息 | `mr_signal.py`, `p1_eval.py`, `score_calibration.py` |
+| P2 执行真实性 | ✅ | comp_vol 唯一穿越费用（net +9.6%，Sharpe 0.046）；动量负 IC 非执行伪影 | `p2_execution.py`, `p2_schedule.py` |
+| P3 工程维护 | ✅ | 缓存/测试/阈值配置全部固化 | `.p0_cache/`, `tests/`, `score_config.py` |
+| P4 生产化 | 🆕 立项 | — | — |
+>
+---
+>
+## 2. 关键实证结论（续用）
+>
+### P0 核心 IC（20d，36 股 × 3.7y，29,476 信号）
+>
+| 切片 | IC | 95% CI | n |
+|---|---|---|---|
+| 总体 | -0.0405 | [-0.051, -0.029] | 29,476 |
+| downtrend_decline | -0.0662 | [-0.084, -0.048] | 13,752 |
+| range_swing | -0.0090 | [-0.037, +0.019] | 6,029 |
+| uptrend_pullback | +0.0119 | [-0.009, +0.032] | 9,695 |
+>
+### P1 信号 IC（20d）
+>
+| 信号 | phase | base IC | net IC |
+|---|---|---|---|
+| mr_score | downtrend_decline | +0.034 | +0.009 |
+| comp_vol | non-downtrend | +0.046 | +0.051 |
+| comp_vol | downtrend_decline | +0.054 | +0.051 |
+| mom | overall | -0.040 | -0.034 |
+>
+### P2-12 rotation-portfolio（230 笔）
+>
+| family | base net | 结论 |
+|---|---|---|
+| mr_score | +11.37% → **-7.16%** | 18.53pp 费用拖垮 |
+| mom | +7.36% → +3.42% | 组合口径为正 |
+| **comp_vol** | +14.43% → **+9.62%** | **唯一幸存者** |
+
+---
+
+## 3. P4 执行计划（下一步）
+
+### 优先级顺序
+1. **4-1 信号组合架构** → `references/signal_combo.py`
+2. **4-2 生产接入** → 升级 `analyze_stock()` + SKILL.md
+3. **4-3 持久化落盘** → `references/store.py`（SQLite）
+4. **4-4 模拟盘验证** → `references/paper_trader.py`
+5. **4-5 风控监控** → 仓位/止损/日终
+
+### 4-1 详细设计
+
+**分 phase 分工表：**
+
+| 市况 (phase) | 主信号 | 辅助过滤 | 仓位权重 |
+|---|---|---|---|
+| uptrend_pullback | comp_vol（量比异动） | mom > 50 确认动量 | 100% |
+| range_swing | comp_vol | mr_score 极端值 | 50% |
+| downtrend_decline | mr_score（均值回归） | RSI2<10 + 乖离>10% | 30% |
+
+**待实现文件：** `references/signal_combo.py`
+
+```python
+def compute_combo_signal(ohlcv: list, bench_closes: list = None) -> dict:
+    """输入 OHLCV → 输出组合信号"""
+    # 1. 计算 phase（复用 calc_pullback_context）
+    # 2. 计算 comp_vol（复用 mr_signal.compute_components）
+    # 3. 计算 mr_score（复用 mr_signal.compute_components）
+    # 4. 按 phase 选择主信号 + 权重
+    # 5. 返回 {phase, primary_signal, secondary_signal, weight, ...}
+```
+
+**验收：**
+- 4-1a: `signal_combo.py` 实现 + 单元测试
+- 4-1b: 组合 vs 单一 comp_vol 回测对比
+- 4-1c: 组合 Sharpe > 0.08，max_dd < 75%
+
+---
+
+## 4. 文件结构（当前）
+
+```
+references/
+├── stock_data_fetcher.py   # 核心：analyze_stock() / backtest_stock() / calc_trend_score()
+├── mr_signal.py            # P1-5: 均值回归 + 候选组件
+├── p0_backtest.py          # P0: 证据扩展 harness
+├── p1_eval.py              # P1: 信号评估 harness
+├── p2_execution.py         # P2: 执行重定价 harness
+├── p2_schedule.py          # P2-12: rotation-portfolio 模拟
+├── score_calibration.py    # P1-7: 分数→概率校准
+└── score_config.py         # P3-14: 阈值配置中心
+
+reports/
+├── p0_expansion.json       # P0 证据
+├── p1_signal_results.json  # P1 信号评估
+├── p1_signal_results_random.json  # P1 holdout
+├── calibration_20d.json    # P1-7 校准工件
+├── p2_execution.json       # P2 执行重定价
+└── p2_schedule.json        # P2-12 组合模拟
+
+tests/
+├── conftest.py
+├── test_ic_stats.py        # P0 统计 9 项
+├── test_mr_signal.py       # P1 组件 4 项
+├── test_p2_execution.py    # P2 执行 6 项
+└── test_score_config.py    # P3-14 阈值 5 项
+```
+
+---
+
+## 5. 复跑命令
+
+```bash
+# P0 全量（缓存命中 <2 分钟）
+python3 references/p0_backtest.py
+
+# P1 全量
+python3 references/p1_eval.py
+
+# P1 holdout（随机样本）
+python3 references/p1_eval.py --universe random --seed 42
+
+# P2 执行重定价
+python3 references/p2_execution.py
+
+# P2-12 组合模拟
+python3 references/p2_schedule.py
+
+# P1-7 校准
+python3 references/score_calibration.py
+
+# 测试套件
+python3 -m pytest tests/ -q
+```
+
+---
+
+## 6. 已知数据源事实
+
+- 腾讯美股 K 线仅覆盖 NASDAQ（.OQ），NYSE 代码（JPM/JNJ/KO/XOM）仅返回 1 根 → yfinance 兜底
+- tencent usSPY 不可用 → 基准用 SPY@yfinance
+- eastmoney push2 主域偶发 502 → 已加重试 + push2delay 镜像回退
+- 缓存 `.p0_cache/` 已 gitignore，冷启动 <2 分钟
+
+---
+
+## 7. 下次执行入口
+
+**立即开始 4-1：**
+
+1. 新建 `references/signal_combo.py`
+2. 复用 `mr_signal.compute_components()` 获取 comp_vol + mr_score
+3. 复用 `stock_data_fetcher.calc_pullback_context()` 获取 phase
+4. 按分 phase 分工表组合信号
+5. 写 3 项单元测试（uptrend / range / downtrend 各一）
+6. 回测对比组合 vs 单一 comp_vol
+
+**验收闸门：** 组合 Sharpe > comp_vol 单一（0.046）→ 目标 > 0.08
