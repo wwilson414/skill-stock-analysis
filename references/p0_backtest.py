@@ -239,20 +239,49 @@ def _align_bench_to_stock(stock_ohlcv: list, bench_rows: list):
     return out, misses
 
 
-def _eastmoney_liquid_pool(pool_size: int):
+def _eastmoney_liquid_pool(pool_size: int, use_cache: bool = True):
     """Whole-A-market snapshot sorted by turnover (f6) via eastmoney clist.
 
+    Retries transient HTTP errors (observed 502s) with backoff and caches
+    the full snapshot under .p0_cache so re-runs use a stable pool.
     Returns (rows, snapshot_date); rows = [{code, name, amount}, ...].
     """
+    import time as _time
     import urllib.request
 
+    cached = _cache_get("pool", f"em_{pool_size}", use_cache)
+    if cached and cached.get("rows"):
+        return cached["rows"], cached.get("snapshot_date")
+
     rows, pn = [], 1
+    # push2delay mirror first: main push2 host had a full 502 outage while
+    # the delay host stayed up; delayed quotes are fine for a turnover snapshot.
+    hosts = ["push2delay.eastmoney.com", "push2.eastmoney.com"]
     while len(rows) < 6000 and pn <= 12:
-        url = ("https://push2.eastmoney.com/api/qt/clist/get"
-               f"?pn={pn}&pz=500&po=1&np=1&fltt=2&invt=2&fid=f6"
-               "&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23&fields=f12,f14,f6")
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        data = json.loads(urllib.request.urlopen(req, timeout=15).read())
+        data = None
+        last_err = None
+        for host in hosts:
+            url = (f"https://{host}/api/qt/clist/get"
+                   f"?pn={pn}&pz=500&po=1&np=1&fltt=2&invt=2&fid=f6"
+                   "&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23&fields=f12,f14,f6")
+            for attempt in range(4):
+                try:
+                    req = urllib.request.Request(
+                        url, headers={"User-Agent": "Mozilla/5.0"})
+                    data = json.loads(urllib.request.urlopen(
+                        req, timeout=15).read())
+                    break
+                except Exception as e:
+                    last_err = e
+                    if attempt == 3:
+                        break
+                    _log(f"[p0] clist {host} pn={pn} attempt {attempt + 1} "
+                         f"failed: {e}; retrying in {2 * (attempt + 1)}s")
+                    _time.sleep(2 * (attempt + 1))
+            if data is not None:
+                break
+        if data is None:
+            raise RuntimeError(f"clist all hosts failed: {last_err}")
         diff = (data.get("data") or {}).get("diff") or []
         if not diff:
             break
@@ -264,7 +293,10 @@ def _eastmoney_liquid_pool(pool_size: int):
                          "amount": float(r["f6"])})
         pn += 1
     rows.sort(key=lambda r: r["amount"], reverse=True)
-    return rows[:pool_size], datetime.now().strftime("%Y-%m-%d")
+    snap_date = datetime.now().strftime("%Y-%m-%d")
+    _cache_put("pool", f"em_{pool_size}",
+               {"snapshot_date": snap_date, "rows": rows})
+    return rows[:pool_size], snap_date
 
 
 
@@ -287,7 +319,8 @@ def build_universe(args):
                                     if c.strip())), {}
 
     if args.universe == "random":
-        pool, snap_date = _eastmoney_liquid_pool(args.pool_size)
+        pool, snap_date = _eastmoney_liquid_pool(args.pool_size,
+                                                 use_cache=not args.no_cache)
         rng = random.Random(args.seed)
         sampled = rng.sample(pool, min(args.sample_n, len(pool)))
         entries = []
@@ -772,7 +805,8 @@ def main():
     _log(f"[p0] summary written -> {args.out}")
     if args.dump_signals:
         with open(args.dump_signals, "w") as f:
-            json.dump([{k: v for k, v in r.items() if k == "signals"}
+            json.dump([{"code": r["code"],
+                        "signals": r.get("signals", [])}
                        for r in records], f, ensure_ascii=False)
         _log(f"[p0] raw signals dumped -> {args.dump_signals}")
 
