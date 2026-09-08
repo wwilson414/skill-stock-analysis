@@ -191,3 +191,79 @@
 | 个股横截面（下跌段） | 均值 -0.097 | 86.1% 个股为负，t=-6.3 | 36 |
 | 半年多起点（下跌段） | 9/10 个半年为负 | 唯一例外 2025-H2 +0.014 | — |
 
+
+## P4 — 生产化与信号组合（立项 2026-09-09）
+
+> P0–P3 已闭环研究结论：comp_vol 是唯一穿越费用的信号（net annual +9.6%，Sharpe 0.046），
+> mr_score 在下跌段 IC 为正但被交易成本淹没，动量总分无概率信息。
+> P4 目标：把研究结论转化为可执行的实盘/模拟盘系统，并构建分 phase 的信号组合。
+
+### 4-1 信号组合架构（分 phase 分工）
+
+基于 P0–P2 实证，单一信号无法覆盖所有市况，需组合：
+
+| 市况 (phase) | 主信号 | 辅助过滤 | 仓位权重 |
+|---|---|---|---|
+| uptrend_pullback | comp_vol（量比异动） | mom > 50 确认动量 | 100% |
+| range_swing | comp_vol | mr_score 极端值（超卖反弹） | 50% |
+| downtrend_decline | mr_score（均值回归） | 仅极端超卖（RSI2<10 + 乖离>10%） | 30%（轻仓） |
+
+- [ ] **4-1a** 实现 `references/signal_combo.py`：输入 OHLCV → 输出组合信号（phase → 主信号 + 权重）
+- [ ] **4-1b** 回测验证：组合信号 vs 单一 comp_vol 的 net annual_ret / Sharpe / max_dd 对比
+- [ ] **4-1c** 验收：组合 Sharpe > comp_vol 单一信号（目标 > 0.08），max_dd < 75%
+
+### 4-2 生产接入（SKILL.md 工作流）
+
+当前 SKILL.md 调用 `stock_data_fetcher.py` 的 `analyze_stock()` 输出总分 + 强买/买/持有信号。
+P4 升级：
+
+- [ ] **4-2a** `analyze_stock()` 新增输出字段：
+  - `signal_combo`: 当前 phase 的主信号 + 权重 + 入场/止损/目标价
+  - `comp_vol_score`: 量比异动评分（0-100）
+  - `mr_score`: 均值回归评分（0-100，仅 downtrend 有意义）
+  - `phase`: 当前市况（uptrend_pullback / range_swing / downtrend_decline）
+- [ ] **4-2b** 买入建议逻辑升级：
+  - 总分 >= 75 且 phase=uptrend_pullback → 强买（comp_vol 确认）
+  - 总分 >= 60 且 phase=downtrend_decline → 仅观察（mr_score 极端值才轻仓）
+  - 总分 >= 60 且 phase=range_swing → 持有（等待突破确认）
+- [ ] **4-2c** SKILL.md 文档更新：反映新信号语义 + 分 phase 建议
+
+### 4-3 持久化落盘（P3-15 续）
+
+- [ ] **4-3a** 实现 `references/store.py`：SQLite 存储（signals.db）
+  - 表 `signals`(date, code, phase, mom, mr_score, comp_vol, combo_signal, weight)
+  - 表 `trades`(date, code, direction, price, size, pnl, status)
+  - 表 `portfolio`(date, cash, positions, total_value, daily_return)
+- [ ] **4-3b** 增量更新：每日新增信号 append，不重写历史
+- [ ] **4-3c** 查询接口：按 code/phase/date_range 检索，支持横向研究
+
+### 4-4 实盘/模拟盘验证框架
+
+- [ ] **4-4a** 实现 `references/paper_trader.py`：
+  - 读取 signals.db → 按组合权重下单 → 跟踪持仓 → 计算 PnL
+  - 支持 T+1 成交、涨跌停不可交易、滑点（10bp）、佣金（A 股 10bp RT）
+- [ ] **4-4b** 回测 2025-09 → 2026-09（样本外 1 年）
+- [ ] **4-4c** 验收：样本外 Sharpe > 0.3，max_dd < 30%，盈亏比 > 1.5
+
+### 4-5 风控与监控
+
+- [ ] **4-5a** 仓位管理：单只股票最大仓位 20%，单一 phase 最大仓位 60%
+- [ ] **4-5b** 止损：个股 -8% 止损，组合 -15% 清仓
+- [ ] **4-5c** 日终监控：每日输出持仓 + 风险敞口 + 异常信号告警
+
+### P4 验收标准
+
+| 指标 | 目标 | 说明 |
+|---|---|---|
+| 组合 Sharpe | > 0.08 | 样本内（2022-2025） |
+| 样本外 Sharpe | > 0.3 | 2025-09 ~ 2026-09 |
+| max_dd | < 30% | 组合层面 |
+| 盈亏比 | > 1.5 | 平均盈利/平均亏损 |
+| 信号覆盖率 | > 60% | 每日至少 1 只股票有信号 |
+
+### P4 残留风险
+
+- **过拟合风险**：P0–P3 在 36 股 × 3.7y 上验证，样本有限；P4-4 样本外验证是关键闸门
+- **容量限制**：comp_vol 在中小盘股有效，大盘股流动性冲击未测试
+- **regime 切换**：phase 标注基于历史数据，实盘存在滞后
+
