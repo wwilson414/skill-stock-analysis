@@ -7,6 +7,8 @@ __pycache__/
 .env
 *.local
 
-# P0 harness local data cache + raw signal dumps (too big for git)
+# Local data cache — do NOT commit (per-stock OHLCV re-fetchable in <2 min)
 references/.p0_cache/
+
+# Raw per-signal row dumps (1-2 MB each) — excluded by default; P2-12 sample only
 reports/signals_*.json
