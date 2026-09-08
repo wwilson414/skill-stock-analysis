@@ -91,15 +91,60 @@
   与 `python3 references/score_calibration.py`（均走 .p0_cache，~4s）。
 - **P1 残留待办：无（holdout 与 comp_pv 复盘均已完成）→ 进入 P2。**
 
-## P2 — 执行真实性（回测可信度）
+## P2 — 执行真实性（回测可信度）— 已完成 2026-09-09
 
-- [ ] **9. 交易成本与滑点**：A股卖出印花税、佣金、冲击成本计入前向收益；否则 IC 有
-      系统性高估。
-- [ ] **10. T+1 与涨跌停在回测中生效**：A股 forward return 应从 T+1 开盘起算；
-      涨停封板的 buy 信号应剔除（买不进）——实盘路径已有 tradability，回测路径还没有。
-- [ ] **11. 前向收益口径统一**：当前用收盘价算前向收益，与实盘"次日开盘买入"存在
-      偏差；改为 next-open 入场价。
+- [x] **9. 交易成本与滑点**：A股卖出印花税、佣金、冲击成本计入前向收益；否则 IC 有
+       系统性高估。
+- [x] **10. T+1 与涨跌停在回测中生效**：A股 forward return 应从 T+1 开盘起算；
+       涨停封板的 buy 信号应剔除（买不进）——实盘路径已有 tradability，回测路径现已统一。
+- [x] **11. 前向收益口径统一**：当前用收盘价算前向收益，与实盘"次日开盘买入"存在
+       偏差；改为 next-open 入场价。
+- [x] **12. P2-12 建仓节奏**：rotation-portfolio 模拟（`references/p2_schedule.py`），
+       等权 max-N 头寸、next-open 入场、持有 forward_days 后出场。
+       产物：`reports/p2_schedule.json`。
 
+### P2 结论备忘（详见 reports/p2_execution.json + p2_schedule.json）
+
+**P2-9/11 执行重定价（29,476 信号）**
+
+| phase | 口径 | 20d IC | 均值 | n |
+|---|---|---|---|---|
+| downtrend_decline | base (close→close) | -0.066 | +0.92% | 13,752 |
+| downtrend_decline | open (next-open→close) | -0.057 | +0.93% | 13,749 |
+| downtrend_decline | net_fee (含费用) | -0.057 | +0.62% | 13,749 |
+| downtrend_decline | **mr_score base** | **+0.034** | **+1.84%** | 13,752 |
+| downtrend_decline | mr_score net | +0.009 | -0.04% | 13,749 |
+| downtrend_decline | **comp_vol net** | **+0.051** | **+1.86%** | 13,749 |
+| uptrend_pullback | comp_vol net | +0.051 | +0.91% | 9,691 |
+| range_swing | comp_vol net | +0.043 | +1.48% | 6,015 |
+
+- **P2-10 涨停不可交易**：A 股封涨停开盘仅 0.12%（21/18,010）次，均匀分布各 phase，
+  平均 base fwd +3.82% —— 不可交易的上涨承诺；跌停延期出场仅 9 次，影响微小。
+- **P2-11 adverse-open**：mom 高分段跳空均 -0.055% vs 低分段 +0.063%（不可避免的 adverse-open）；
+  mr_score 反向（+0.283 vs -0.303，均值回归天然抗衡跳空）。
+
+**P2-12 rotation-portfolio（36 股 × 3.7y × 29,476 信号 × 230 笔）**
+
+| family | variant | annual_ret | sharpe | max_dd | n | phase_mix |
+|---|---|---|---|---|---|---|
+| mom | base | +7.36% | 0.040 | 65.6% | 230 | uptrend 176 / range 48 / downtrend 6 |
+| mom | net | +3.42% | 0.013 | 85.8% | 223 | uptrend 165 / range 51 / downtrend 7 |
+| mr_score | base | +11.37% | 0.066 | 61.5% | 228 | **downtrend 194** / range 24 / uptrend 10 |
+| mr_score | net | **-7.16%** | **-0.024** | **95.7%** | 165 | downtrend 140 / range 14 / uptrend 11 |
+| **comp_vol** | **base** | **+14.43%** | **0.082** | 66.8% | 225 | downtrend 94 / uptrend 61 / range 70 |
+| **comp_vol** | **net** | **+9.62%** | **0.046** | 86.9% | 213 | downtrend 84 / uptrend 56 / range 73 |
+
+- **唯一幸存者：comp_vol**（量比异动）—— net annual ret >0，Sharpe 0.046，max_dd 87%。
+- **mr_score base 为正（+11.37%）但执行成本 18.53pp 将其打到 -7.16%** —— 交易过于集中
+  于 downtrend_decline（194/228 笔），信号噪声大、费用拖垮；IC 为正但组合经不起交易成本。
+- **mom 在组合语境下不再为负**（base +7.36%, net +3.42%）—— 集中 uptrend_pullback，
+  IC 负但组合正：**IC 与组合收益符号可以不同**。
+- **mom_still_negative: False**（组合口径）—— P2 否决"动量负 IC 是执行伪影"假设。
+
+**P2 verdict**：`mr_score downtrend net edge 被交易成本淹没`；
+`comp_vol 是唯一穿越费用的信号，但 Sharpe <0.1、max_dd ~87%`；
+`动量负 IC 不是执行伪影，而是选股排序问题`。
+→ 下一步：P4 生产化复核 + 信号组合（comp_vol + mr_score 分 phase 分工）。
 ## P3 — 工程与可维护性
 
 - [x] **12. 数据缓存层（P0 局部实现）**：P0 harness 自带 `.p0_cache/` JSON 缓存
