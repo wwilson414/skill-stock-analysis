@@ -2281,6 +2281,20 @@ def analyze_stock(code: str, days: int = 120, fetch_news: bool = False) -> dict:
     context["unlock_pct_30d"] = unlock_pct_30d
     score = calc_trend_score(ma, macd, rsi, vol, bias, support, context)
 
+    # P4-2: phase-aware combo signal — switches primary driver by market phase
+    # (uptrend: comp_vol / range: comp_vol / downtrend: mr_score), hard gates per
+    # the P4-1 division-of-labour table. Non-fatal: a combo failure never blocks
+    # the rest of the analysis. Lazy import avoids a circular dependency
+    # (signal_combo imports calc_ma / calc_pullback_context from this module).
+    combo = None
+    try:
+        from signal_combo import compute_combo_signal
+        mom_scores = [None] * len(valid_bars)
+        mom_scores[-1] = score.get("total") if score else None
+        combo = compute_combo_signal(valid_bars, mom_scores=mom_scores)
+    except Exception as e:
+        _log(f"[{code}] combo signal failed: {e}")
+
     # News search (optional) - structured: dates + time-decayed sentiment
     news = []
     news_summary = None
@@ -2310,6 +2324,7 @@ def analyze_stock(code: str, days: int = 120, fetch_news: bool = False) -> dict:
         },
         "events": {"upcoming_unlocks": unlocks, "unlock_pct_30d": unlock_pct_30d},
         "trend_score": score,
+        "combo": combo,
         "recent_bars": valid_bars[-10:],  # same sequence as indicators input, dates strictly aligned
         "as_of": valid_bars[-1].get("date"),  # Indicator calculation cutoff date
         "adjustment": raw.get("adjustment", "unknown"),

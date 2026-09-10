@@ -27,6 +27,12 @@ For each stock, output one card separated by `---`:
 | P/E Ratio | {pe_ratio} |
 | P/B Ratio | {pb_ratio} |
 
+**Combo Signal (phase-aware, P4-1)**
+- Phase: {combo_phase_en} | Primary: {combo_primary} | Weight: {combo_weight} | Combo Score: {combo_score}
+- Gate: {combo_gates_en} | Gate Blocked: {combo_gate_blocked_en} | Secondary: {combo_secondary}
+
+> `combo_score` 为空（gate blocked / 数据不足）时输出 `N/A`——该 bar 不作为组合候选；不要用动量总分替代排名。
+
 **Technical Analysis**
 - Phase/Position: {phase_en} | 120-day range position {range_pos_pct}% | Distance from MA60 {dist_ma60_pct:+.2f}% | 20-day change {chg_20d_pct:+.2f}%
 - Relative Strength: vs {bench_en} 20D RS {rs_20d:+.2f}% | 60D RS {rs_60d:+.2f}%

@@ -1,8 +1,8 @@
 # Stock-Analysis Skill — Handoff 文档
 
 > **创建日期**：2026-09-09
-> **当前阶段**：P0–P3 已完成 ✅，P4-1 已完成 ✅，P4-2 待执行 🆕
-> **下一步**：执行 P4-2 生产接入（combo 字段 + SKILL.md）
+> **当前阶段**：P0–P3 已完成 ✅，P4-1/P4-2 已完成 ✅，P4-3 待执行 🆕
+> **下一步**：执行 P4-3 持久化落盘（store.py SQLite）
 
 ---
 
@@ -38,14 +38,20 @@
 - **结论**：缓存/测试/阈值配置全部固化
 - **产物**：`.p0_cache/`, `tests/`（26 项 pytest），`references/score_config.py`
 
-### P4 — 生产化与信号组合 🆕
-- **状态**：P4-1 完成 ✅；P4-2 待执行
+### P4 — 生产化与信号组合 ✅ P4-1/P4-2
+- **状态**：P4-1 ✅、P4-2 ✅；P4-3 待执行
 - **产物**：
   - `references/signal_combo.py` — 分 phase 组合信号（P4-1）
   - `references/p4_combo_backtest.py` — 4-1b 回测对比 harness
   - `reports/p4_combo_backtest.json` — 4-1c 验收数据
   - `tests/test_signal_combo.py` — 5 项单测
-- **验收**：4-1b ✅（combo net Sharpe 0.059 > comp_vol 0.046，年化 +12.81% vs +9.62%，max_dd 74.8% < 86.9%）；4-1c Sharpe>0.08 ⚠️ 仅 open 口径达标（0.086），net 0.059 → 留给 4-4 模拟盘调优
+  - `analyze_stock()` 输出新增 `combo` 字段（P4-2，调用 `compute_combo_signal`，非致命 fallback）
+  - `SKILL.md` STEP 4.5 组合信号说明 + `output-format-template.md` Combo Signal 卡片行
+  - `tests/test_analyze_combo.py` — 4 项单测
+- **验收**：
+  - 4-1b ✅（combo net Sharpe 0.059 > comp_vol 0.046，年化 +12.81% vs +9.62%，max_dd 74.8% < 86.9%）
+  - 4-1c Sharpe>0.08 ⚠️ 仅 open 口径达标（0.086），net 0.059 → 留给 4-4 模拟盘调优
+  - 4-2 ✅ 字段完整（phase/primary/weight/gates/gate_blocked/combo_score/context），combo.phase 与 indicators.context.phase 一致（同一分类器）
 
 ---
 
@@ -109,7 +115,8 @@ tests/
 ├── test_mr_signal.py       # P1 组件 4 项
 ├── test_p2_execution.py    # P2 执行 6 项
 ├── test_score_config.py    # P3-14 阈值 5 项
-└── test_signal_combo.py    # P4-1 组合信号 5 项
+├── test_signal_combo.py    # P4-1 组合信号 5 项
+└── test_analyze_combo.py   # P4-2 analyze_stock combo 接入 4 项
 ```
 
 ---
@@ -192,9 +199,27 @@ API：
 2. **downtrend 的 gate 必须是 mr_event（含止跌日）**：A/B 实验证明去掉止跌条件（仅 RSI2+乖离）后 net Sharpe 从 0.059 → 0.046、dd 81%——下跌段"极端超卖但未止跌"的笔是坏的
 3. 组合主力来自 uptrend（147 笔）+ range（69 笔）；downtrend 仅 2 笔入选（extreme_only 刻意保守）
 
-### 下一步：P4-2 生产接入
+### P4-2 生产接入 ✅（2026-09-10）
 
-`analyze_stock()` 输出新增 `combo` 字段（调用 `compute_combo_signal`），SKILL.md 补充组合信号用法。
+**完成内容：**
+- `analyze_stock()` 输出新增 `combo` 字段：{phase, primary, primary_score, weight, secondary, secondary_score, gates, gate_results, gate_blocked, combo_score, context}
+  - 通过延迟 `from signal_combo import compute_combo_signal` 接入（避免循环导入：signal_combo 反向依赖 stock_data_fetcher）
+  - `mom_scores[-1] = score["total"]`（momentum_confirm gate 使用真实动量总分）
+  - 非致命：combo 计算失败仅记日志 → `combo: None`，不阻塞整体分析
+- `SKILL.md` 新增 **STEP 4.5: Phase-Aware Combo Signal**（分工表 + dashboard 解读规则 + 回测证据）
+- `output-format-template.md` 卡片新增 **Combo Signal** 区块
+- `tests/test_analyze_combo.py` 4 项单测（字段完整 / phase 与 context 一致 / downtrend primary / 非致命故障路径）
+
+**验收：**
+- 4-2a ✅ `analyze_stock()` 输出 `combo` 字段完整
+- 4-2c ✅ SKILL.md 文档更新
+- 4-2b ⚠️ 买入建议逻辑升级为 SKILL 判断层任务（ROADMAP 标记"待 SKILL 判断接入"），字段/文档已就绪
+
+**实证校准（重要）：** 合成信号上 `trend_score.total`（momentum）直接充当 momentum_confirm 的 mom 输入；combo.phase 与 `indicators.context.phase` 100% 一致（同一 `calc_pullback_context`）。
+
+### 下一步：P4-3 持久化落盘
+
+`references/store.py`（SQLite）：表 `signals`(date, code, phase, mom, mr_score, comp_vol, combo_signal, weight) / `trades` / `portfolio`；增量 append + 按 code/phase/date_range 查询。
 
 ---
 
@@ -203,7 +228,7 @@ API：
 | 任务 | 内容 | 验收 | 状态 |
 |---|---|---|---|
 | 4-1 信号组合架构 | `signal_combo.py`，分 phase 分工 | Sharpe > 0.08 | ✅（net 0.059 / open 0.086，dd 74.8%） |
-| 4-2 生产接入 | `analyze_stock()` 新增 combo 字段 + SKILL.md | 字段完整 | 待执行 |
+| 4-2 生产接入 | `analyze_stock()` 新增 combo 字段 + SKILL.md | 字段完整 | ✅（combo 字段 + STEP 4.5 + 模板；4-2b SKILL 判断层待接） |
 | 4-3 持久化落盘 | `store.py`（SQLite） | CRUD 可用 | 待执行 |
 | 4-4 模拟盘验证 | `paper_trader.py`，样本外 1 年 | Sharpe > 0.3, max_dd < 30% | 待执行（承接 4-1c 的 Sharpe 0.08 差额） |
 | 4-5 风控监控 | 仓位/止损/日终 | 监控面板 | 待执行 |
@@ -246,13 +271,15 @@ cd /home/wwei/workspace/skill-stock-analysis
 cat HANDOFF.md
 
 # 3. 验证环境
-python3 -m pytest tests/ -q          # 31 passed
+python3 -m pytest tests/ -q          # 35 passed
 python3 references/p0_backtest.py    # P0 全量（缓存 <2 min）
 
-# 4. 开始 P4-2 生产接入
-# → analyze_stock() 新增 combo 字段（调用 compute_combo_signal）
-# → SKILL.md 补充组合信号用法
-# → 复跑 python3 references/p4_combo_backtest.py 确认回归
+# 4. 开始 P4-3 持久化落盘
+# → 新建 references/store.py（SQLite）
+# → 表 signals(date, code, phase, mom, mr_score, comp_vol, combo_signal, weight)
+#   / trades / portfolio
+# → 增量 append（每日新增，不重写历史）+ 按 code/phase/date_range 查询
+# → 验收：CRUD 可用 + 单元测试
 ```
 
 ---

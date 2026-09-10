@@ -205,28 +205,26 @@
 | 市况 (phase) | 主信号 | 辅助过滤 | 仓位权重 |
 |---|---|---|---|
 | uptrend_pullback | comp_vol（量比异动） | mom > 50 确认动量 | 100% |
-| range_swing | comp_vol | mr_score 极端值（超卖反弹） | 50% |
-| downtrend_decline | mr_score（均值回归） | 仅极端超卖（RSI2<10 + 乖离>10%） | 30%（轻仓） |
+| range_swing | comp_vol | mr_score 极端值（加分，soft） | 50% |
+| downtrend_decline | mr_score（均值回归） | RSI2<10 + 乖离>10% + **止跌日** | 30%（轻仓） |
 
-- [ ] **4-1a** 实现 `references/signal_combo.py`：输入 OHLCV → 输出组合信号（phase → 主信号 + 权重）
-- [ ] **4-1b** 回测验证：组合信号 vs 单一 comp_vol 的 net annual_ret / Sharpe / max_dd 对比
-- [ ] **4-1c** 验收：组合 Sharpe > comp_vol 单一信号（目标 > 0.08），max_dd < 75%
+- [x] **4-1a** 实现 `references/signal_combo.py`：输入 OHLCV → 组合信号 dict + 批量序列（`compute_combo_signal` / `combo_signal_series`）+ 5 项单测
+- [x] **4-1b** 回测验证（`references/p4_combo_backtest.py`，29,476 行）：combo net +12.81%/Sharpe 0.059 vs comp_vol +9.62%/0.046；phase 与动量回测 100% 一致
+- [x] **4-1c** 验收：组合 Sharpe > comp_vol ✅（0.059 > 0.046）；max_dd 74.8% < 75% ✅；目标 > 0.08 ⚠️ 仅 open 口径达标（0.086）→ 记账 4-4
 
 ### 4-2 生产接入（SKILL.md 工作流）
 
 当前 SKILL.md 调用 `stock_data_fetcher.py` 的 `analyze_stock()` 输出总分 + 强买/买/持有信号。
 P4 升级：
 
-- [ ] **4-2a** `analyze_stock()` 新增输出字段：
-  - `signal_combo`: 当前 phase 的主信号 + 权重 + 入场/止损/目标价
-  - `comp_vol_score`: 量比异动评分（0-100）
-  - `mr_score`: 均值回归评分（0-100，仅 downtrend 有意义）
-  - `phase`: 当前市况（uptrend_pullback / range_swing / downtrend_decline）
-- [ ] **4-2b** 买入建议逻辑升级：
+- [x] **4-2a** `analyze_stock()` 新增输出字段（2026-09-10 完成）：
+  - `combo`: {phase, primary, primary_score, weight, secondary, gates, gate_results, gate_blocked, combo_score, context}
+  - `combo_score` 已含 phase 权重；`gate_blocked=True` 时该 bar 不作为组合候选
+- [ ] **4-2b** 买入建议逻辑升级（待 SKILL 判断接入）：
   - 总分 >= 75 且 phase=uptrend_pullback → 强买（comp_vol 确认）
-  - 总分 >= 60 且 phase=downtrend_decline → 仅观察（mr_score 极端值才轻仓）
+  - 总分 >= 60 且 phase=downtrend_decline → 仅观察（mr_score 极端值才轻仓，combo gate=extreme_only）
   - 总分 >= 60 且 phase=range_swing → 持有（等待突破确认）
-- [ ] **4-2c** SKILL.md 文档更新：反映新信号语义 + 分 phase 建议
+- [x] **4-2c** SKILL.md 文档更新：新增 STEP 4.5 组合信号说明 + output-format-template 增加 Combo Signal 卡片行
 
 ### 4-3 持久化落盘（P3-15 续）
 

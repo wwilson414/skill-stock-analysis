@@ -166,6 +166,36 @@ file_read("references/analysis-prompt-template.md")
    - A-share execution constraints: limit-up with sealed board (script has blocked buy, T+1 cannot buy), >=5% float unlock within 30 days (script has blocked); limit-down/3-5% unlock flagged with warnings, must be written in report
    - Must provide precise stop-loss and target prices
 
+## STEP 4.5: Phase-Aware Combo Signal (P4-1)
+
+`analyze_stock()` returns a `combo` object — the phase-switched signal built from
+P1-validated components (mean-reversion `mr_score` + volume-surge `comp_vol`).
+It replaces the flat momentum score as the primary ranking input when present.
+
+**Division of labour (by `combo.phase`, same classifier as `indicators.context`):**
+
+| phase | primary | weight | gate (when gate fails → `combo_score = None`) |
+|-------|---------|--------|------------------------------------------------|
+| uptrend_pullback | comp_vol | 1.0 | `momentum_confirm`: mom > 50 (fallback: 20d change >= 0) |
+| range_swing | comp_vol | 0.5 | `mr_extreme`: mr_score >= 2 adds +0.5 (soft, gate never blocks) |
+| downtrend_decline | mr_score | 0.3 | `extreme_only`: RSI2<=10 & dev_MA60<=-10% & stabilization day (mr_event) |
+
+**Reading it in the dashboard:**
+- `combo.combo_score` is the executable edge signal: positive = candidate, larger = stronger.
+  The **weight column already encodes phase** (uptrend 1.0 / range 0.5 / downtrend 0.3) — do not double-penalize the phase again.
+- `combo.gate_blocked = True` means that phase's hard gate rejected the bar —
+  the bar must NOT be ranked as a combo candidate (trend is the gate, not the score).
+- `combo.primary` tells you which component drove the number; cross-check it with
+  the P1 evidence: comp_vol IC +0.05 non-downtrend, mr_score IC +0.034 downtrend.
+  Confidence comes from the **primary** matching the phase (per the table above).
+- Downtrend combo entries only exist on true mean-reversion setups (extreme oversold
+  + stabilization). On those rare bars, mr_score is the driver — never let a high
+  momentum score in a downtrend veto an mr_event rebound.
+
+Backtest evidence (P4-1b, 29,476 signals, net-of-fee 20d rotation portfolio):
+combo +12.8%/yr Sharpe 0.059 vs comp_vol +9.6%/0.046 — the combo is the current
+best single ranker; `combo.phase` matches the momentum backtest's phase on all rows.
+
 ## STEP 5: Output Decision Dashboard
 
 1. Read format template:
