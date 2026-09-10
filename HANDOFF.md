@@ -249,6 +249,7 @@ COSTS = {"cn_a": (0.025, 0.075), "cn_hk": (0.12, 0.12), "us": (0.02, 0.02)}
 ## 10. 关键 Git Commits
 
 ```
+2acf0aa P4-2: analyze_stock() combo 字段 + SKILL.md STEP 4.5（生产接入）
 ad45ffa P4-1: signal_combo.py 分 phase 组合 + 4-1b 回测（net Sharpe 0.059）
 a20c71d P4 立项：生产化与信号组合
 0738eec chore: clarify .gitignore comments
