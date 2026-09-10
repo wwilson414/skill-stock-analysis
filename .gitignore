@@ -12,3 +12,6 @@ references/.p0_cache/
 
 # Raw per-signal row dumps (1-2 MB each) — excluded by default; P2-12 sample only
 reports/signals_*.json
+
+# SQLite databases (P4-3 store) — rebuildable from cache, do not commit
+reports/*.db

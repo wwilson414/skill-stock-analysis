@@ -96,6 +96,7 @@ def run_stock_combo(task):
             row["combo"] = (combo["combo_score"]
                             if combo and not combo["gate_blocked"]
                             and combo["combo_score"] is not None else None)
+            row["combo_weight"] = combo["weight"] if combo else None
             # entry executability (A-share T+1: cannot buy a limit-up open)
             if is_a and j_entry < n and th_dec is not None:
                 prev_c = p2._num(ohlcv[i].get("close"))

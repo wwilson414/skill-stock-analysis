@@ -228,12 +228,12 @@ P4 升级：
 
 ### 4-3 持久化落盘（P3-15 续）
 
-- [ ] **4-3a** 实现 `references/store.py`：SQLite 存储（signals.db）
-  - 表 `signals`(date, code, phase, mom, mr_score, comp_vol, combo_signal, weight)
-  - 表 `trades`(date, code, direction, price, size, pnl, status)
+- [x] **4-3a** 实现 `references/store.py`：SQLite 存储（signals.db，2026-09-10 完成）
+  - 表 `signals`(date, code, phase, mom, mr_score, comp_vol, combo_signal, combo_weight, gate_blocked)
+  - 表 `trades`(id, date, code, direction, price, size, pnl, status)
   - 表 `portfolio`(date, cash, positions, total_value, daily_return)
-- [ ] **4-3b** 增量更新：每日新增信号 append，不重写历史
-- [ ] **4-3c** 查询接口：按 code/phase/date_range 检索，支持横向研究
+- [x] **4-3b** 增量更新：每日新增信号 append，不重写历史（upsert on PK(date, code)，created_at 保留）
+- [x] **4-3c** 查询接口：按 code/phase/date_range 检索（`query_signals`），7 项单测 + demo 冒烟
 
 ### 4-4 实盘/模拟盘验证框架
 
