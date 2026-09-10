@@ -1,0 +1,321 @@
+{
+ "horizon_main": "20d",
+ "max_positions": 5,
+ "hold_days": 20,
+ "slippage_bp": 10,
+ "n_rows": 29476,
+ "n_stocks_ok": 36,
+ "n_stocks_skip": 0,
+ "rotation_table": {
+  "combo": {
+   "base": {
+    "n": 219,
+    "total_ret": 88.68,
+    "annual_ret": 17.5,
+    "annual_vol": 243.28,
+    "sharpe": 0.072,
+    "max_dd": 0.9279,
+    "hit_rate": 53.4,
+    "mean_ret": 2.025,
+    "n_candidates": 15515,
+    "phase_mix": {
+     "range_swing": 88,
+     "uptrend_pullback": 131
+    }
+   },
+   "open": {
+    "n": 221,
+    "total_ret": 107.22,
+    "annual_ret": 20.33,
+    "annual_vol": 237.31,
+    "sharpe": 0.086,
+    "max_dd": 0.9264,
+    "hit_rate": 54.3,
+    "mean_ret": 2.426,
+    "n_candidates": 15497,
+    "phase_mix": {
+     "range_swing": 85,
+     "uptrend_pullback": 136
+    }
+   },
+   "net_fee": {
+    "n": 221,
+    "total_ret": 75.11,
+    "annual_ret": 15.3,
+    "annual_vol": 211.22,
+    "sharpe": 0.072,
+    "max_dd": 0.7744,
+    "hit_rate": 53.8,
+    "mean_ret": 1.699,
+    "n_candidates": 15497,
+    "phase_mix": {
+     "range_swing": 80,
+     "uptrend_pullback": 140,
+     "downtrend_decline": 1
+    }
+   },
+   "net": {
+    "n": 218,
+    "total_ret": 60.69,
+    "annual_ret": 12.81,
+    "annual_vol": 216.0,
+    "sharpe": 0.059,
+    "max_dd": 0.7484,
+    "hit_rate": 49.1,
+    "mean_ret": 1.392,
+    "n_candidates": 15497,
+    "phase_mix": {
+     "range_swing": 69,
+     "uptrend_pullback": 147,
+     "downtrend_decline": 2
+    }
+   }
+  },
+  "mom": {
+   "base": {
+    "n": 230,
+    "total_ret": 39.24,
+    "annual_ret": 7.8,
+    "annual_vol": 182.28,
+    "sharpe": 0.043,
+    "max_dd": 0.6561,
+    "hit_rate": 54.8,
+    "mean_ret": 0.853,
+    "n_candidates": 29476,
+    "phase_mix": {
+     "range_swing": 48,
+     "downtrend_decline": 6,
+     "uptrend_pullback": 176
+    }
+   },
+   "open": {
+    "n": 223,
+    "total_ret": 29.07,
+    "annual_ret": 5.96,
+    "annual_vol": 234.16,
+    "sharpe": 0.025,
+    "max_dd": 0.8246,
+    "hit_rate": 53.4,
+    "mean_ret": 0.652,
+    "n_candidates": 29455,
+    "phase_mix": {
+     "range_swing": 43,
+     "downtrend_decline": 6,
+     "uptrend_pullback": 174
+    }
+   },
+   "net_fee": {
+    "n": 222,
+    "total_ret": 27.29,
+    "annual_ret": 5.63,
+    "annual_vol": 186.82,
+    "sharpe": 0.03,
+    "max_dd": 0.7043,
+    "hit_rate": 49.5,
+    "mean_ret": 0.615,
+    "n_candidates": 29455,
+    "phase_mix": {
+     "range_swing": 43,
+     "downtrend_decline": 5,
+     "uptrend_pullback": 174
+    }
+   },
+   "net": {
+    "n": 223,
+    "total_ret": 20.75,
+    "annual_ret": 4.37,
+    "annual_vol": 235.19,
+    "sharpe": 0.019,
+    "max_dd": 0.7825,
+    "hit_rate": 52.0,
+    "mean_ret": 0.465,
+    "n_candidates": 29455,
+    "phase_mix": {
+     "range_swing": 50,
+     "downtrend_decline": 7,
+     "uptrend_pullback": 166
+    }
+   }
+  },
+  "mr_score": {
+   "base": {
+    "n": 228,
+    "total_ret": 60.79,
+    "annual_ret": 11.37,
+    "annual_vol": 173.05,
+    "sharpe": 0.066,
+    "max_dd": 0.6145,
+    "hit_rate": 53.5,
+    "mean_ret": 1.333,
+    "n_candidates": 29476,
+    "phase_mix": {
+     "range_swing": 24,
+     "downtrend_decline": 194,
+     "uptrend_pullback": 10
+    }
+   },
+   "open": {
+    "n": 217,
+    "total_ret": 19.49,
+    "annual_ret": 4.12,
+    "annual_vol": 233.03,
+    "sharpe": 0.018,
+    "max_dd": 0.8214,
+    "hit_rate": 50.7,
+    "mean_ret": 0.449,
+    "n_candidates": 29455,
+    "phase_mix": {
+     "range_swing": 20,
+     "downtrend_decline": 185,
+     "uptrend_pullback": 12
+    }
+   },
+   "net_fee": {
+    "n": 220,
+    "total_ret": 19.45,
+    "annual_ret": 4.11,
+    "annual_vol": 199.82,
+    "sharpe": 0.021,
+    "max_dd": 0.7044,
+    "hit_rate": 48.2,
+    "mean_ret": 0.442,
+    "n_candidates": 29455,
+    "phase_mix": {
+     "range_swing": 18,
+     "downtrend_decline": 192,
+     "uptrend_pullback": 10
+    }
+   },
+   "net": {
+    "n": 165,
+    "total_ret": -27.93,
+    "annual_ret": -7.16,
+    "annual_vol": 297.97,
+    "sharpe": -0.024,
+    "max_dd": 0.9572,
+    "hit_rate": 46.7,
+    "mean_ret": -0.846,
+    "n_candidates": 29455,
+    "phase_mix": {
+     "range_swing": 14,
+     "downtrend_decline": 140,
+     "uptrend_pullback": 11
+    }
+   }
+  },
+  "comp_vol": {
+   "base": {
+    "n": 225,
+    "total_ret": 81.14,
+    "annual_ret": 14.43,
+    "annual_vol": 175.58,
+    "sharpe": 0.082,
+    "max_dd": 0.6684,
+    "hit_rate": 51.6,
+    "mean_ret": 1.803,
+    "n_candidates": 29476,
+    "phase_mix": {
+     "range_swing": 70,
+     "downtrend_decline": 94,
+     "uptrend_pullback": 61
+    }
+   },
+   "open": {
+    "n": 210,
+    "total_ret": 12.03,
+    "annual_ret": 2.61,
+    "annual_vol": 273.26,
+    "sharpe": 0.01,
+    "max_dd": 0.8756,
+    "hit_rate": 45.2,
+    "mean_ret": 0.286,
+    "n_candidates": 29455,
+    "phase_mix": {
+     "range_swing": 78,
+     "downtrend_decline": 77,
+     "uptrend_pullback": 55
+    }
+   },
+   "net_fee": {
+    "n": 217,
+    "total_ret": 56.16,
+    "annual_ret": 10.64,
+    "annual_vol": 207.24,
+    "sharpe": 0.051,
+    "max_dd": 0.8695,
+    "hit_rate": 47.5,
+    "mean_ret": 1.294,
+    "n_candidates": 29455,
+    "phase_mix": {
+     "range_swing": 78,
+     "downtrend_decline": 84,
+     "uptrend_pullback": 55
+    }
+   },
+   "net": {
+    "n": 213,
+    "total_ret": 49.93,
+    "annual_ret": 9.62,
+    "annual_vol": 207.88,
+    "sharpe": 0.046,
+    "max_dd": 0.8693,
+    "hit_rate": 46.9,
+    "mean_ret": 1.172,
+    "n_candidates": 29455,
+    "phase_mix": {
+     "range_swing": 73,
+     "downtrend_decline": 84,
+     "uptrend_pullback": 56
+    }
+   }
+  }
+ },
+ "phase_agreement": {
+  "agree": 29476,
+  "disagree": 0,
+  "agreement_pct": 100.0,
+  "per_phase": {
+   "downtrend_decline": {
+    "agree": 13752,
+    "total": 13752
+   },
+   "range_swing": {
+    "agree": 6029,
+    "total": 6029
+   },
+   "uptrend_pullback": {
+    "agree": 9695,
+    "total": 9695
+   }
+  }
+ },
+ "verdict": {
+  "combo_net_sharpe": 0.059,
+  "combo_net_annual_ret": 12.81,
+  "combo_net_max_dd": 0.7484,
+  "combo_net_hit_rate": 49.1,
+  "comp_vol_net_sharpe": 0.046,
+  "combo_beats_comp_vol": true,
+  "combo_sharpe_above_008": false,
+  "combo_max_dd_below_75pct": true,
+  "phase_agreement": {
+   "agree": 29476,
+   "disagree": 0,
+   "agreement_pct": 100.0,
+   "per_phase": {
+    "downtrend_decline": {
+     "agree": 13752,
+     "total": 13752
+    },
+    "range_swing": {
+     "agree": 6029,
+     "total": 6029
+    },
+    "uptrend_pullback": {
+     "agree": 9695,
+     "total": 9695
+    }
+   }
+  }
+ }
+}

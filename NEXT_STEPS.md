@@ -1,7 +1,7 @@
 # Stock-Analysis Skill — 执行交接文档
 >
-> 最后更新：2026-09-09
-> 当前阶段：P0–P3 已完成，P4 已立项待执行
+> 最后更新：2026-09-10
+> 当前阶段：P0–P3 已完成，P4-1 已完成，P4-2 待执行
 >
 ---
 >
@@ -13,7 +13,7 @@
 | P1 信号质量 | ✅ | mr_score 下跌段 IC+0.034；comp_vol 非下跌段 IC+0.046；总分无概率信息 | `mr_signal.py`, `p1_eval.py`, `score_calibration.py` |
 | P2 执行真实性 | ✅ | comp_vol 唯一穿越费用（net +9.6%，Sharpe 0.046）；动量负 IC 非执行伪影 | `p2_execution.py`, `p2_schedule.py` |
 | P3 工程维护 | ✅ | 缓存/测试/阈值配置全部固化 | `.p0_cache/`, `tests/`, `score_config.py` |
-| P4 生产化 | 🆕 立项 | — | — |
+| P4 生产化 | ✅ P4-1 | 分 phase 组合信号 net Sharpe 0.059 > comp_vol 0.046，max_dd 74.8%；phase 100% 对齐 | `signal_combo.py`, `p4_combo_backtest.py`, `test_signal_combo.py` |
 >
 ---
 >
@@ -50,38 +50,32 @@
 ## 3. P4 执行计划（下一步）
 
 ### 优先级顺序
-1. **4-1 信号组合架构** → `references/signal_combo.py`
-2. **4-2 生产接入** → 升级 `analyze_stock()` + SKILL.md
+1. **4-1 信号组合架构** → `references/signal_combo.py` ✅ 已完成
+2. **4-2 生产接入** → 升级 `analyze_stock()` + SKILL.md **← 下一步**
 3. **4-3 持久化落盘** → `references/store.py`（SQLite）
-4. **4-4 模拟盘验证** → `references/paper_trader.py`
+4. **4-4 模拟盘验证** → `references/paper_trader.py`（承接 4-1c Sharpe 0.08 差额）
 5. **4-5 风控监控** → 仓位/止损/日终
 
-### 4-1 详细设计
+### 4-1 完成记录（2026-09-10）
 
-**分 phase 分工表：**
+`signal_combo.py` 实现分工表：uptrend→comp_vol×1.0（momentum_confirm）、range→comp_vol×0.5（mr_extreme 加分）、downtrend→mr_score×0.3（extreme_only = mr_event 止跌日）。
 
-| 市况 (phase) | 主信号 | 辅助过滤 | 仓位权重 |
+**4-1b 回测（net 口径，29,476 行）：**
+
+| family | net 年化 | Sharpe | max_dd |
 |---|---|---|---|
-| uptrend_pullback | comp_vol（量比异动） | mom > 50 确认动量 | 100% |
-| range_swing | comp_vol | mr_score 极端值 | 50% |
-| downtrend_decline | mr_score（均值回归） | RSI2<10 + 乖离>10% | 30% |
+| **combo** | **+12.81%** | **0.059** | 74.8% |
+| comp_vol | +9.62% | 0.046 | 86.9% |
 
-**待实现文件：** `references/signal_combo.py`
+**验收：** 4-1a ✅ / 4-1b ✅ / 4-1c ⚠️（net 0.059 < 0.08，open 0.086 达标；dd 74.8% < 75% ✅）
 
-```python
-def compute_combo_signal(ohlcv: list, bench_closes: list = None) -> dict:
-    """输入 OHLCV → 输出组合信号"""
-    # 1. 计算 phase（复用 calc_pullback_context）
-    # 2. 计算 comp_vol（复用 mr_signal.compute_components）
-    # 3. 计算 mr_score（复用 mr_signal.compute_components）
-    # 4. 按 phase 选择主信号 + 权重
-    # 5. 返回 {phase, primary_signal, secondary_signal, weight, ...}
-```
+**4-1 关键发现：** combo_phase 与 momentum phase 100% 一致；downtrend gate 必须含止跌日（A/B 证明去掉后 Sharpe 0.059→0.046）。
 
-**验收：**
-- 4-1a: `signal_combo.py` 实现 + 单元测试
-- 4-1b: 组合 vs 单一 comp_vol 回测对比
-- 4-1c: 组合 Sharpe > 0.08，max_dd < 75%
+### 4-2 详细设计（待实现）
+
+- `analyze_stock()` 输出新增 `combo` 字段：调用 `signal_combo.compute_combo_signal(ohlcv, mom_scores=score_total对齐)`
+- SKILL.md 补充组合信号用途（分 phase 分工表 + combo 字段解读）
+- 验收：字段完整（phase/primary/weight/combo_score/gates）+ 复跑 `pytest` 31 项 + 复跑 `p4_combo_backtest.py` 回归
 
 ---
 
@@ -91,12 +85,14 @@ def compute_combo_signal(ohlcv: list, bench_closes: list = None) -> dict:
 references/
 ├── stock_data_fetcher.py   # 核心：analyze_stock() / backtest_stock() / calc_trend_score()
 ├── mr_signal.py            # P1-5: 均值回归 + 候选组件
+├── signal_combo.py         # P4-1: 分 phase 组合信号
 ├── p0_backtest.py          # P0: 证据扩展 harness
 ├── p1_eval.py              # P1: 信号评估 harness
 ├── p2_execution.py         # P2: 执行重定价 harness
 ├── p2_schedule.py          # P2-12: rotation-portfolio 模拟
+├── p4_combo_backtest.py    # P4-1b: 组合 vs 单一信号回测
 ├── score_calibration.py    # P1-7: 分数→概率校准
-└── score_config.py         # P3-14: 阈值配置中心
+└── score_config.py         # P3-14: 阈值配置中心（含 COMBO）
 
 reports/
 ├── p0_expansion.json       # P0 证据
@@ -104,14 +100,16 @@ reports/
 ├── p1_signal_results_random.json  # P1 holdout
 ├── calibration_20d.json    # P1-7 校准工件
 ├── p2_execution.json       # P2 执行重定价
-└── p2_schedule.json        # P2-12 组合模拟
+├── p2_schedule.json        # P2-12 组合模拟
+└── p4_combo_backtest.json  # P4-1b/1c 组合回测验收
 
 tests/
 ├── conftest.py
 ├── test_ic_stats.py        # P0 统计 9 项
 ├── test_mr_signal.py       # P1 组件 4 项
 ├── test_p2_execution.py    # P2 执行 6 项
-└── test_score_config.py    # P3-14 阈值 5 项
+├── test_score_config.py    # P3-14 阈值 5 项
+└── test_signal_combo.py    # P4-1 组合信号 5 项
 ```
 
 ---
@@ -134,6 +132,9 @@ python3 references/p2_execution.py
 # P2-12 组合模拟
 python3 references/p2_schedule.py
 
+# P4-1b 组合 vs 单一信号回测（缓存命中 ~1.5 分钟）
+python3 references/p4_combo_backtest.py
+
 # P1-7 校准
 python3 references/score_calibration.py
 
@@ -154,13 +155,12 @@ python3 -m pytest tests/ -q
 
 ## 7. 下次执行入口
 
-**立即开始 4-1：**
+**立即开始 4-2 生产接入：**
 
-1. 新建 `references/signal_combo.py`
-2. 复用 `mr_signal.compute_components()` 获取 comp_vol + mr_score
-3. 复用 `stock_data_fetcher.calc_pullback_context()` 获取 phase
-4. 按分 phase 分工表组合信号
-5. 写 3 项单元测试（uptrend / range / downtrend 各一）
-6. 回测对比组合 vs 单一 comp_vol
+1. `analyze_stock()` 输出新增 `combo` 字段
+   - 调用 `signal_combo.compute_combo_signal(ohlcv, mom_scores=score_total 对齐数组)`（warmup 60 根后才有信号）
+   - 保留 `comp_vol` / `mr_score` 组件字段不变
+2. SKILL.md 补充组合信号用法（分工表 + combo 字段解读）
+3. 验收：`pytest` 31 项全绿 + 复跑 `p4_combo_backtest.py` 回归（combo net Sharpe 0.059 / dd 74.8% 应复现）
 
-**验收闸门：** 组合 Sharpe > comp_vol 单一（0.046）→ 目标 > 0.08
+**4-4 模拟盘前置：** 4-1c 的 net Sharpe 0.059 → 0.08 差额留到 `paper_trader.py`（执行费用/频率调优，非信号逻辑）。

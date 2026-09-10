@@ -35,6 +35,17 @@ MR = {
     "brk_horizon_ref": 0.02,         # 2% breakout reference
     "gap_ref": 0.02,
 }
+COMBO = {                           # P4-1: phase-aware signal combination
+    # 分工表：| phase | 主信号 | 辅助过滤 | 仓位权重 |
+    "weight_uptrend": 1.0,          # uptrend_pullback: comp_vol 主，mom 确认动量
+    "weight_range": 0.5,            # range_swing: comp_vol 主，mr_score 极端辅助
+    "weight_downtrend": 0.3,        # downtrend_decline: mr_score 主，extreme_only
+    "mom_confirm_min": 50.0,        # uptrend: mom > 50 才进入组合（动量确认）
+    "chg20d_confirm_min": 0.0,      # uptrend fallback: 20d 动量为正（无 mom 分数时）
+    "mr_extreme_min": 2.0,          # range_swing: mr_score >= 2 视为极端超卖
+    "mr_extreme_boost": 0.5,        # range_swing: 极端超卖时对 combo 的加分
+    "min_bars": 61,                 # 组合信号 warmup（与 _MIN_BARS_FOR_INDICATORS 一致）
+}
 REGIME = {
     "warmup_bars": 60,
     "bull_chg60_min_pct": 5.0,
