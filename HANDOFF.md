@@ -224,6 +224,7 @@ COSTS = {"cn_a": (0.025, 0.075), "cn_hk": (0.12, 0.12), "us": (0.02, 0.02)}
 ## 10. 关键 Git Commits
 
 ```
+ad45ffa P4-1: signal_combo.py 分 phase 组合 + 4-1b 回测（net Sharpe 0.059）
 a20c71d P4 立项：生产化与信号组合
 0738eec chore: clarify .gitignore comments
 2b924c1 P2-12: rotation-portfolio sim + full P2 verdict
