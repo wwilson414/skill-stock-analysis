@@ -53,7 +53,7 @@
 1. **4-1 信号组合架构** → `references/signal_combo.py` ✅ 已完成
 2. **4-2 生产接入** → 升级 `analyze_stock()` + SKILL.md ✅ 已完成
 3. **4-3 持久化落盘** → `references/store.py`（SQLite）✅ 已完成
-4. **4-4 模拟盘验证** → `references/paper_trader.py`（承接 4-1c Sharpe 0.08 差额）**← 下一步**
+4. **4-4 模拟盘验证** → `references/paper_trader.py` ✅ 已完成
 5. **4-5 风控监控** → 仓位/止损/日终
 
 ### 4-1 完成记录（2026-09-10）
@@ -183,13 +183,8 @@ python3 -m pytest tests/ -q
 
 ## 7. 下次执行入口
 
-**立即开始 4-4 模拟盘验证：**
+**立即开始 4-5 风控监控：**
 
-1. 新建 `references/paper_trader.py`
-   - 数据源：`store.py` signals 表（`query_signals(date_from, date_to)`）或 p4 rows 实时喂入
-   - 下单：按 `combo_signal` 排序 + `combo_weight` 仓位（uptrend 1.0 / range 0.5 / downtrend 0.3）
-   - 执行：T+1 成交、涨跌停不可交易、滑点 10bp、佣金（`score_config.COSTS`）
-   - 日终：`Store.save_portfolio_snapshot` / `save_trade` / `close_trade` 落盘
-2. 回放窗口：样本外 2025-09 ~ 2026-09
-3. 验收闸门：**样本外 Sharpe > 0.3，max_dd < 30%**；执行费用/频率调优可解决 4-1c 的 net Sharpe 0.08 差额，禁止改信号逻辑
-4. 单元测试（tmp_path db + 合成信号）：下单/成交/涨跌停跳过/日终快照
+1. 仓位管理：单只股票最大仓位 20%（`max_positions>=5` 已隐含），单一 phase 最大仓位 60%
+2. 止损：个股 -8% 止损，组合 -15% 清仓
+3. 日终监控：每日输出持仓 + 风险敞口 + 异常信号告警

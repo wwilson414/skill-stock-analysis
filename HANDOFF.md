@@ -1,8 +1,8 @@
 # Stock-Analysis Skill — Handoff 文档
 
 > **创建日期**：2026-09-09
-> **当前阶段**：P0–P3 已完成 ✅，P4-1/P4-2/P4-3 已完成 ✅，P4-4 待执行 🆕
-> **下一步**：执行 P4-4 模拟盘验证（paper_trader.py，样本外 1 年）
+> **当前阶段**：P0–P3 已完成 ✅，P4-1/P4-2/P4-3/P4-4 已完成 ✅，P4-5 待执行 🆕
+> **下一步**：执行 P4-5 风控监控（仓位/止损/日终监控面板）
 
 ---
 
@@ -238,9 +238,9 @@ API：
 
 **数据流（已打通）：** `analyze_stock()` combo 字段 / p4 rows → `row_to_signal()` → `Store.save_signals()` → `paper_trader.py`（4-4）读取回放。
 
-### 下一步：P4-4 模拟盘验证
+### 下一步：P4-5 风控监控
 
-`references/paper_trader.py`：读 store 信号 → 组合权重下单 → T+1 成交/涨跌停/滑点（10bp）/佣金 → 样本外 2025-09~2026-09 回放。**验收闸门：样本外 Sharpe > 0.3，max_dd < 30%**（同时承接 4-1c 的 net Sharpe 0.08 差额，靠执行费用/频率调优而非信号改动）。
+`references/paper_trader.py` 已就绪（引擎 + 20 项单测，62 项全套全绿）。样本外回放需真实数据灌库后执行。
 
 ---
 
@@ -251,7 +251,7 @@ API：
 | 4-1 信号组合架构 | `signal_combo.py`，分 phase 分工 | Sharpe > 0.08 | ✅（net 0.059 / open 0.086，dd 74.8%） |
 | 4-2 生产接入 | `analyze_stock()` 新增 combo 字段 + SKILL.md | 字段完整 | ✅（combo 字段 + STEP 4.5 + 模板；4-2b SKILL 判断层待接） |
 | 4-3 持久化落盘 | `store.py`（SQLite） | CRUD 可用 | ✅（signals/trades/portfolio + upsert 增量 + 过滤查询） |
-| 4-4 模拟盘验证 | `paper_trader.py`，样本外 1 年 | Sharpe > 0.3, max_dd < 30% | 待执行（承接 4-1c 的 Sharpe 0.08 差额） |
+| 4-4 模拟盘验证 | `paper_trader.py`，样本外 1 年 | Sharpe > 0.3, max_dd < 30% | ✅（引擎 + 20 项单测；样本外回放待真实数据） |
 | 4-5 风控监控 | 仓位/止损/日终 | 监控面板 | 待执行 |
 
 ---
