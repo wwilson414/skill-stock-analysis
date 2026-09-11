@@ -18,9 +18,13 @@ Execution model
   by combo_signal, one position per code.
 * Daily mark-to-market at close (net of estimated round-trip costs);
   end-of-day snapshots/trades optionally persisted via store (P4-3).
+* Risk gates (P4-5, RiskMonitor, on by default): entry blocked when a code
+  would exceed 20% of portfolio or its phase 60%; a position whose last close
+  is -8% below entry is force-closed (stop-loss); a portfolio -15% from peak
+  liquidates all holdings (circuit breaker, entries halted that day).
 
-Gate (out-of-sample 2025-09 ~ 2026-09): Sharpe > 0.3, max_dd < 30%.
-Tuning lever is execution (fees/frequency) only — never the signal logic.
+Gate (out-of-sample 2025-09 ~ 2026-09): Sharpe > 0.3, max_dd < 30%,
+profit_factor > 1.5, coverage_pct > 60%.
 
 Usage
   python3 references/paper_trader.py --db reports/signals.db \\
@@ -38,7 +42,8 @@ from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from score_config import COSTS
+from score_config import COSTS, RISK
+from risk_monitor import RiskMonitor
 from store import Store
 
 PERIODS_PER_YEAR = 252
@@ -76,19 +81,46 @@ def _max_dd(series):
     return dd
 
 
+def _profit_factor(rets: list) -> float:
+    """Avg win / avg loss (profit factor). None when there is no losing trade.
+
+    rets are percent returns (ret_pct). wins = rets > 0, losses = rets < 0.
+    """
+    if not rets:
+        return None
+    wins = [r for r in rets if r > 0]
+    losses = [r for r in rets if r < 0]
+    if not wins:
+        return 0.0                      # nothing won at all
+    avg_win = sum(wins) / len(wins)
+    if not losses:
+        return None                     # no losing trade -> undefined/infinite
+    avg_loss = sum(losses) / len(losses)
+    if avg_loss == 0:
+        return None
+    return round(avg_win / abs(avg_loss), 3)
+
+
 class PaperTrader:
     """Daily-loop replay engine over {code: [bars]} prices + combo signals."""
 
     def __init__(self, prices: dict, max_positions: int = 5, hold: int = 20,
                  slippage_bp: float = 10.0, store: Store = None,
-                 persist: bool = False):
-        """prices: {code: [ {date, open, close, ...}, ... ]} chronological."""
+                 persist: bool = False, use_risk: bool = True):
+        """prices: {code: [ {date, open, close, ...}, ... ]} chronological.
+
+        use_risk=True (default) enables RiskMonitor gates inside replay():
+        per-stock/per-phase entry limits, per-stock -8% stop-loss, and the
+        -15% portfolio circuit breaker. Set False to reproduce legacy runs.
+        """
         self.prices = prices
         self.max_positions = max_positions
         self.hold = hold
         self.slip = slippage_bp / 10000.0    # 10bp -> 0.001 (decimal per side)
         self.store = store if persist else None
         self.persist = persist
+        self.use_risk = use_risk
+        self.risk = RiskMonitor() if use_risk else None
         # per-code date -> bar index and trading calendar (union of codes)
         self.px = {code: {b["date"]: b for b in bars if b.get("date")}
                    for code, bars in prices.items()}
@@ -130,7 +162,7 @@ class PaperTrader:
                 d, code, "BUY", bar["open"], round(alloc, 6))
         return pos
 
-    def _close_position(self, pos, exit_px, d, stats):
+    def _close_position(self, pos, exit_px, d, stats, reason="hold"):
         entry_eff = pos["entry_px"] * (1 + self.slip)
         exit_eff = exit_px * (1 - self.slip)
         proceeds = pos["alloc"] * exit_eff / entry_eff \
@@ -143,10 +175,33 @@ class PaperTrader:
             "exit_px": round(exit_px, 4), "weight": pos["weight"],
             "ret_pct": round(ret_pct, 3), "pnl": round(pnl, 6),
             "rolls": pos["rolls"], "phase": pos["phase"],
+            "exit_reason": reason,
         })
         if self.store is not None and pos.get("trade_id"):
             self.store.close_trade(pos["trade_id"], round(pnl, 6))
         return proceeds
+
+    # -- risk integration ---------------------------------------------------
+    def _positions_view(self, positions: dict, d: str) -> dict:
+        """RiskMonitor-compatible holdings: {code: {value, phase, ...}}.
+
+        value = mark-to-market notional (alloc * mtm_ratio * portfolio_scale
+        is unitless here, so we use alloc * mtm_ratio as the *fractional*
+        value). RiskMonitor only compares *fractions* of the portfolio, so
+        feeding it fractions of total unit capital is consistent as long as
+        portfolio_value is normalised to the same scale. We pass
+        portfolio_value=1.0 (total = cash + sum(alloc*mtm) with unit cash).
+        """
+        out = {}
+        for code, pos in positions.items():
+            frac = pos["alloc"] * self._mtm_ratio(pos)
+            out[code] = {"value": frac, "phase": pos.get("phase", "unknown"),
+                         "weight": pos.get("weight", 1.0),
+                         "entry_price": pos.get("entry_px")}
+            bar = self.px.get(code, {}).get(d)
+            if bar:
+                out[code]["current_price"] = bar.get("close")
+        return out
 
     # -- main loop ----------------------------------------------------------
     def replay(self, signals: list) -> dict:
@@ -167,11 +222,16 @@ class PaperTrader:
         cash = 1.0
         positions = {}                     # code -> pos dict
         stats = {"entries": 0, "skipped_limit_up": 0, "exit_delayed": 0,
-                 "no_fill": 0, "trades": [], "equity_dates": []}
+                 "no_fill": 0, "risk_blocked": 0, "stop_loss_trades": 0,
+                 "circuit_breakers": 0, "trades": [], "equity_dates": []}
         equity = []
         prev_daily = None
+        peak_mv = 0.0                       # trailing high-water mark (circuit bkr)
+        breaker_tripped = False
 
         for di, d in enumerate(self.dates):
+            breaker_tripped = False
+
             # 1) exits: positions due today (limit-down rolls forward)
             for code in list(positions):
                 pos = positions[code]
@@ -193,8 +253,25 @@ class PaperTrader:
                 cash += proceeds
                 del positions[code]
 
+            # 1b) stop-loss: position whose last known close is -8% vs entry
+            # is force-close today (at today's close if available).
+            if self.use_risk and self.risk is not None:
+                for code in list(positions):
+                    pos = positions[code]
+                    if pos.get("last_close") and \
+                            pos["last_close"] <= self.risk.stop_loss_level(
+                                pos["entry_px"]):
+                        bar = self.px.get(code, {}).get(d)
+                        px = bar["close"] if bar and bar.get("close") \
+                            else pos["last_close"]
+                        proceeds = self._close_position(
+                            pos, px, d, stats, reason="stop_loss")
+                        cash += proceeds
+                        stats["stop_loss_trades"] += 1
+                        del positions[code]
+
             # 2) entries: yesterday's signals fill at today's open (T+1)
-            if di > 0:
+            if di > 0 and not breaker_tripped:
                 yday = self.dates[di - 1]
                 for s in sig_by_date.get(yday, []):
                     if len(positions) >= self.max_positions:
@@ -217,6 +294,15 @@ class PaperTrader:
                             and bar["open"] >= prev_close * (1 + th / 100 - SEAL_BUFFER):
                         stats["skipped_limit_up"] += 1
                         continue
+                    # risk entry gate: per-stock / per-phase position limits
+                    if self.use_risk and self.risk is not None:
+                        pv = peak_mv if peak_mv > 0 else 1.0
+                        allowed, _r = self.risk.can_enter(
+                            code, s.get("phase"), alloc, pv,
+                            self._positions_view(positions, d))
+                        if not allowed:
+                            stats["risk_blocked"] += 1
+                            continue
                     pos = self._open_position(code, s, bar, prev_close, d)
                     positions[code] = pos
                     cash -= alloc
@@ -231,6 +317,7 @@ class PaperTrader:
                     pos["last_close"] = bar["close"]
                 mv += pos["alloc"] * self._mtm_ratio(pos)
             equity.append(mv)
+            peak_mv = max(peak_mv, mv)
             daily_ret = (mv / prev_daily - 1.0) if prev_daily else 0.0
             stats["equity_dates"].append(d)
             if self.store is not None:
@@ -239,6 +326,24 @@ class PaperTrader:
                     round(daily_ret * 100, 4))
             prev_daily = mv
 
+            # 3b) circuit breaker: portfolio -15% from peak -> liquidate all
+            if self.use_risk and self.risk is not None and positions:
+                if self.risk.check_circuit_breaker(mv, peak_mv):
+                    stats["circuit_breakers"] += 1
+                    breaker_tripped = True
+                    for code in list(positions):
+                        pos = positions[code]
+                        bar = self.px.get(code, {}).get(d)
+                        px = bar["close"] if bar and bar.get("close") \
+                            else pos["last_close"]
+                        proceeds = self._close_position(
+                            pos, px, d, stats, reason="circuit_breaker")
+                        cash += proceeds
+                        del positions[code]
+
+        # coverage: days with at least one rankable signal / total trading days
+        stats["coverage_pct"] = round(
+            100.0 * len(sig_by_date) / max(1, len(self.dates)), 1)
         stats.update(self._performance(equity, stats["trades"]))
         stats["n_positions_open"] = len(positions)
         return stats
@@ -248,7 +353,7 @@ class PaperTrader:
         if not equity:
             return {"total_ret": 0.0, "annual_ret": 0.0, "annual_vol": 0.0,
                     "sharpe": 0.0, "max_dd": 0.0, "hit_rate": None,
-                    "mean_ret": None, "n_trades": 0}
+                    "mean_ret": None, "profit_factor": None, "n_trades": 0}
         daily = [equity[i] / equity[i - 1] - 1.0
                  for i in range(1, len(equity)) if equity[i - 1] > 0]
         sd = _std(daily)
@@ -267,6 +372,7 @@ class PaperTrader:
             "hit_rate": round(100.0 * sum(1 for r in rets if r > 0) / len(rets), 1)
             if rets else None,
             "mean_ret": round(sum(rets) / len(rets), 3) if rets else None,
+            "profit_factor": _profit_factor(rets),
             "n_trades": len(rets),
         }
 
@@ -331,7 +437,8 @@ def _demo():
     print("[p4t] demo stats:")
     for k in ("entries", "skipped_limit_up", "exit_delayed", "n_trades",
               "total_ret", "annual_ret", "annual_vol", "sharpe", "max_dd",
-              "hit_rate"):
+              "hit_rate", "profit_factor", "coverage_pct",
+              "stop_loss_trades", "circuit_breakers", "risk_blocked"):
         print(f"  {k}: {stats[k]}")
     assert stats["entries"] > 0
     assert stats["n_trades"] > 0
@@ -381,9 +488,13 @@ def main():
             store.close()
 
     gate = {"sharpe": stats.get("sharpe"), "max_dd": stats.get("max_dd"),
+            "profit_factor": stats.get("profit_factor"),
+            "coverage_pct": stats.get("coverage_pct"),
             "sharpe_above_03": (stats.get("sharpe") or 0) > 0.3,
             "max_dd_below_30pct": (stats.get("max_dd") is not None
-                                   and stats.get("max_dd") < 0.30)}
+                                   and stats.get("max_dd") < 0.30),
+            "profit_factor_above_15": (stats.get("profit_factor") or 0) > 1.5,
+            "coverage_above_60pct": (stats.get("coverage_pct") or 0) > 60.0}
     out = {"window": {"start": args.start, "end": args.end},
            "max_positions": args.max_positions, "hold": args.hold,
            "slippage_bp": args.slippage_bp, "n_signals": len(signals),

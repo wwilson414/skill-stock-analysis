@@ -13,7 +13,9 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir, "references"))
 
-from paper_trader import PaperTrader, _limit_threshold_pct, _max_dd, _std
+from paper_trader import (PaperTrader, _limit_threshold_pct, _max_dd,
+                          _profit_factor, _std)
+from risk_monitor import RiskMonitor
 
 
 # ---------------------------------------------------------------------------
@@ -167,9 +169,9 @@ class TestPositionSizing:
         sigs_a = [_signal("2026-01-02", code="AAPL", combo_weight=0.5)]
         sigs_b = [_signal("2026-01-02", code="AAPL", combo_weight=1.0)]
         t_half = PaperTrader({"AAPL": bars_a}, max_positions=4, hold=10,
-                             slippage_bp=0.0)
+                             slippage_bp=0.0, use_risk=False)
         t_full = PaperTrader({"AAPL": bars_b}, max_positions=4, hold=10,
-                             slippage_bp=0.0)
+                             slippage_bp=0.0, use_risk=False)
         s_half = t_half.replay(sigs_a)
         s_full = t_full.replay(sigs_b)
         # Both have zero PnL (flat prices, no costs); weight difference shows
@@ -240,3 +242,108 @@ class TestPerformanceMetrics:
         assert perf["sharpe"] == 0.0
         assert perf["annual_vol"] == 0.0
         assert not math.isnan(perf["sharpe"])
+class TestProfitFactor:
+    def test_avg_win_over_avg_loss(self):
+        assert _profit_factor([10.0, -5.0]) == pytest.approx(2.0)
+        assert _profit_factor([5.0, 15.0, -10.0]) == pytest.approx(1.0)
+        assert _profit_factor([5.0, 25.0, -10.0]) == pytest.approx(1.5)
+
+    def test_no_losses_none(self):
+        assert _profit_factor([1.0, 2.0, 3.0]) is None
+
+    def test_no_wins_zero(self):
+        assert _profit_factor([-1.0, -2.0]) == 0.0
+
+    def test_empty_none(self):
+        assert _profit_factor([]) is None
+
+    def test_exact_break_even_loses_zero(self):
+        # zero losses -> undefined (None), keeps gate conservative
+        assert _profit_factor([0.0, 5.0]) is None
+
+
+class TestRiskIntegration:
+    def _flat_bars(self, n=30, px0=100.0, drift=0.0):
+        out = []
+        p = px0
+        for i in range(n):
+            if i > 0:
+                p = px0 * (1.0 + drift * i)
+            out.append({"date": f"2026-01-{i + 1:02d}" if i < 22 else
+                               f"2026-02-{i - 21:02d}",
+                        "open": p, "close": p})
+        return out
+
+    def test_stop_loss_triggers_exit(self):
+        """Position losing >8% is force-closed with exit_reason=stop_loss."""
+        bars = [{"date": "2026-01-01", "open": 100.0, "close": 100.0},
+                {"date": "2026-01-02", "open": 100.0, "close": 100.0},
+                {"date": "2026-01-03", "open": 95.0, "close": 95.0},
+                {"date": "2026-01-04", "open": 88.0, "close": 88.0},
+                {"date": "2026-01-05", "open": 90.0, "close": 90.0}]
+        prices = {"AAPL": bars}
+        sigs = [_signal("2026-01-01", code="AAPL", combo_weight=1.0)]
+        # hold=10 means normal exit never happens before stop-loss fires;
+        # entry on 01-02 at open 100, stop-loss level = 92
+        t = PaperTrader(prices, max_positions=5, hold=10, slippage_bp=0.0)
+        stats = t.replay(sigs)
+        assert stats["stop_loss_trades"] >= 1
+        assert any(x["exit_reason"] == "stop_loss" for x in stats["trades"])
+
+    def test_no_stop_loss_without_drop(self):
+        """Flat/rising prices never trigger stop-loss."""
+        bars = self._flat_bars(30, drift=0.0)
+        prices = {"AAPL": bars}
+        sigs = [_signal("2026-01-02", code="AAPL", combo_weight=1.0)]
+        t = PaperTrader(prices, max_positions=5, hold=10, slippage_bp=0.0)
+        stats = t.replay(sigs)
+        assert stats["stop_loss_trades"] == 0
+
+    def test_risk_blocked_when_over_phase_limit(self):
+        """4th same-phase entry blocked by the 60% per-phase cap."""
+        bars = self._flat_bars(60, drift=0.0)
+        prices = {f"S{i}": bars for i in range(4)}
+        # 3 uptrend entries x 20% = 60% (cap); the 4th is blocked
+        sigs = [_signal("2026-01-02", code=f"S{i}", combo_weight=1.0,
+                        combo_signal=0.9 - i * 0.01) for i in range(4)]
+        t = PaperTrader(prices, max_positions=5, hold=10, slippage_bp=0.0)
+        stats = t.replay(sigs)
+        assert stats["entries"] == 3
+        assert stats["risk_blocked"] == 1
+
+    def test_circuit_breaker_liquidates_all(self):
+        """Portfolio -15% from peak closes all positions on the day."""
+        bars = [{"date": "2026-01-01", "open": 100.0, "close": 100.0},
+                {"date": "2026-01-02", "open": 100.0, "close": 100.0},
+                {"date": "2026-01-03", "open": 100.0, "close": 100.0},
+                {"date": "2026-01-04", "open": 70.0, "close": 70.0},  # -30%
+                {"date": "2026-01-05", "open": 70.0, "close": 70.0}]
+        prices = {f"S{i}": bars for i in range(3)}
+        sigs = [_signal("2026-01-01", code=f"S{i}", combo_weight=1.0,
+                        combo_signal=0.9 - i * 0.01) for i in range(3)]
+        # 3 x 20% = 60% invested (phase cap); -30% price drop -> equity dd
+        # ~18% > 15% -> circuit breaker liquidates all on 01-04
+        t = PaperTrader(prices, max_positions=5, hold=10, slippage_bp=0.0)
+        stats = t.replay(sigs)
+        assert stats["circuit_breakers"] >= 1
+        assert stats["n_positions_open"] == 0
+        assert any(x["exit_reason"] == "circuit_breaker" for x in stats["trades"])
+
+    def test_coverage_pct_computed(self):
+        """coverage_pct = signal days / trading days."""
+        bars = self._flat_bars(10, drift=0.0)
+        t = PaperTrader({"AAPL": bars}, max_positions=5, hold=5, slippage_bp=0.0)
+        stats = t.replay([_signal("2026-01-01", code="AAPL")])
+        assert stats["coverage_pct"] == pytest.approx(10.0)  # 1 signal day / 10 days
+
+    def test_risk_off_reproduces_legacy(self):
+        """use_risk=False does not add risk stats."""
+        bars = self._flat_bars(30, drift=0.0)
+        prices = {"S1": bars, "S2": bars}
+        sigs = [_signal("2026-01-02", code="S1", combo_weight=1.0),
+                _signal("2026-01-02", code="S2", combo_weight=1.0)]
+        t = PaperTrader(prices, max_positions=5, hold=10, slippage_bp=0.0,
+                        use_risk=False)
+        stats = t.replay(sigs)
+        assert stats["entries"] == 2
+        assert stats.get("risk_blocked", 0) == 0
