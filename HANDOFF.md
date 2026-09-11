@@ -220,7 +220,7 @@ API：
 **验收：**
 - 4-2a ✅ `analyze_stock()` 输出 `combo` 字段完整
 - 4-2c ✅ SKILL.md 文档更新
-- 4-2b ⚠️ 买入建议逻辑升级为 SKILL 判断层任务（ROADMAP 标记"待 SKILL 判断接入"），字段/文档已就绪
+- 4-2b ✅ 买入建议判断规则写入 SKILL.md STEP 4.5（强买/仅观察/持有 + combo 字段落地方式）
 
 **实证校准（重要）：** 合成信号上 `trend_score.total`（momentum）直接充当 momentum_confirm 的 mom 输入；combo.phase 与 `indicators.context.phase` 100% 一致（同一 `calc_pullback_context`）。
 
@@ -263,7 +263,7 @@ API：
 | 任务 | 内容 | 验收 | 状态 |
 |---|---|---|---|
 | 4-1 信号组合架构 | `signal_combo.py`，分 phase 分工 | Sharpe > 0.08 | ✅（net 0.059 / open 0.086，dd 74.8%） |
-| 4-2 生产接入 | `analyze_stock()` 新增 combo 字段 + SKILL.md | 字段完整 | ✅（combo 字段 + STEP 4.5 + 模板；4-2b SKILL 判断层待接） |
+| 4-2 生产接入 | `analyze_stock()` 新增 combo 字段 + SKILL.md | 字段完整 | ✅（combo 字段 + STEP 4.5 判断规则 + 模板） |
 | 4-3 持久化落盘 | `store.py`（SQLite） | CRUD 可用 | ✅（signals/trades/portfolio + upsert 增量 + 过滤查询） |
 | 4-4 模拟盘验证 | `paper_trader.py`，样本外 1 年 | Sharpe > 0.3, max_dd < 30% | ✅（引擎 + 20 项单测；样本外回放待真实数据） |
 | 4-5 风控监控 | `risk_monitor.py`，仓位/止损/日终 | 监控面板 | ✅（仓位限制 + 止损 + 熔断 + EOD 报告 + 23 项单测） |

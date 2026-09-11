@@ -80,7 +80,7 @@
 - output-format-template.md 卡片新增 Combo Signal 区块
 - `tests/test_analyze_combo.py` 4 项单测（字段完整 / phase 与 context 一致 / downtrend primary / 非致命路径）
 
-**验收：** 4-2a ✅ 字段完整 / 4-2c ✅ 文档更新 / 4-2b ⚠️ SKILL 判断层（ROADMAP 标记待接）
+**验收：** 4-2a ✅ 字段完整 / 4-2b ✅ SKILL 判断规则（STEP 4.5）/ 4-2c ✅ 文档更新
 
 ### 4-3 完成记录（2026-09-10）
 

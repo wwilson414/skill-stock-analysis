@@ -32,8 +32,9 @@
       range_swing / uptrend_pullback 的 IC 与 0 无法区分。
 - [x] **4. 消除选择偏差**：选股规则逐字记录于输出 JSON（`universe.rule`），
       股票池在运行前冻结、不按 realized 路径过滤。残余偏差：知名股幸存者
-      偏差，可用 `--universe random`（全市场流动性抽样、seed 可复现）交叉
-      验证——**待办**。
+      偏差，用 `--universe random`（全市场流动性抽样、seed 可复现）交叉
+      验证——✅ 已完成（P1 holdout 2026-09-08：seed 42，30 只全 A 流动性
+      随机中小盘、24,562 信号全部复现，见 `reports/p1_signal_results_random.json`）。
 - 证据文件：`reports/p0_expansion.json`（汇总）、`reports/signals_p0_fixed.json`
   （原始信号，gitignore）；复跑：`python3 references/p0_backtest.py`。
 - 附带发现：低分桶（0-30）20d 平均收益 +2.58% 高于高分桶（75+）的 +0.85%
@@ -153,13 +154,16 @@
       K 线只稳定覆盖 NASDAQ（.OQ），NYSE 代码（JPM/JNJ/KO/XOM）仅返回 1 根，
       需 yfinance 兜底（harness 已内置，见 `_yf_us_ohlcv`）；tencent usSPY
       同样不可用，基准用 SPY@yfinance。
-- [ ] **13. 测试固化**：单测目前散在 /tmp 临时文件。建 `tests/` 目录，把各轮单测
-      （对齐、复权、ATR、情绪、tradability、回测、A/B、phase）固化为 pytest 套件 + CI。
-      P0 harness 的 9 项统计/标注单测一并迁入。
-- [ ] **14. 阈值配置化**：评分系统里所有魔法数字（各类阈值、区间）集中到一个带理由
-      注释的配置块/文件，改参数不用翻代码。
-- [ ] **15. 回测结果落盘**：批量回测输出到数据库而非 stdout JSON，支持后续横向研究
-      （跨股票/跨时期对比）。P0 harness 的 reports/*.json 是临时方案。
+- [x] **13. 测试固化**：`tests/` 目录已建（2026-09-08~09-11），9 组 85 项 pytest：
+      test_ic_stats.py(9) + test_mr_signal.py(4) + test_p2_execution.py(6) +
+      test_score_config.py(5) + test_signal_combo.py(5) + test_analyze_combo.py(4) +
+      test_store.py(7) + test_paper_trader.py(20) + test_risk_monitor.py(23)。
+- [x] **14. 阈值配置化**：`references/score_config.py` 集中全部魔法数字
+      （SIGNAL_THRESHOLDS / GATES / LIMIT / MR / COMBO / REGIME / COSTS / RISK），
+      带理由注释，改参数不用翻代码。
+- [x] **15. 回测结果落盘**：`references/store.py`（P4-3）SQLite 持久化
+      （signals/trades/portfolio 落盘 + upsert 增量 + 过滤查询）；
+      `p4_combo_backtest.py --save-store` 可将批量回测灌库。
 
 ## 明确不做 / 已否决
 
@@ -220,10 +224,11 @@ P4 升级：
 - [x] **4-2a** `analyze_stock()` 新增输出字段（2026-09-10 完成）：
   - `combo`: {phase, primary, primary_score, weight, secondary, gates, gate_results, gate_blocked, combo_score, context}
   - `combo_score` 已含 phase 权重；`gate_blocked=True` 时该 bar 不作为组合候选
-- [ ] **4-2b** 买入建议逻辑升级（待 SKILL 判断接入）：
-  - 总分 >= 75 且 phase=uptrend_pullback → 强买（comp_vol 确认）
-  - 总分 >= 60 且 phase=downtrend_decline → 仅观察（mr_score 极端值才轻仓，combo gate=extreme_only）
-  - 总分 >= 60 且 phase=range_swing → 持有（等待突破确认）
+- [x] **4-2b** 买入建议逻辑升级 ✅（已由 SKILL.md STEP 4.5 判断规则 + `combo` 字段实现）：
+  - 总分 >= 75 且 phase=uptrend_pullback → 强买（comp_vol 确认，weight 1.0）
+  - 总分 >= 60 且 phase=downtrend_decline → 仅观察（mr_score 极端值才轻仓，combo gate=extreme_only 挡住普通下跌）
+  - 总分 >= 60 且 phase=range_swing → 持有（等待突破确认，weight 0.5）
+  - 落地方式：`combo.combo_score` 正=候选、`combo.weight` 已编码 phase、`combo.gate_blocked=True` 禁止排入候选
 - [x] **4-2c** SKILL.md 文档更新：新增 STEP 4.5 组合信号说明 + output-format-template 增加 Combo Signal 卡片行
 
 ### 4-3 持久化落盘（P3-15 续）
