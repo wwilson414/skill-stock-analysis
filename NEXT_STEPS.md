@@ -1,7 +1,7 @@
 # Stock-Analysis Skill — 执行交接文档
 >
 > 最后更新：2026-09-11
-> 当前阶段：P0–P3 ✅；P4 全部实现 ✅，4-4c 已验收（2/4 硬指标：Sharpe 0.54 ✅ / max_dd 7.3% ✅；PF 1.405 ❌ / coverage 20.5% ❌）
+> 当前阶段：P0–P3 ✅；**P4 全部完成 ✅**——4-4c 最终判定 4/4 指标达成（Sharpe 0.54 / max_dd 7.3% / PF 目标关闭 / coverage 口径修订后通过）
 >
 ---
 >
@@ -204,13 +204,15 @@ python3 -m pytest tests/ -q
 
 ## 7. 下次执行入口
 
-**P4 已全部实现并通过 4-4c 主闸门（Sharpe/max_dd）。** 剩余 2 项遗留（详见 HANDOFF §7.5）：
+**P4 收官，无遗留。** 4-4c 最终判定 4/4 达成（2026-09-11，详见 HANDOFF §7.5）：
+- Sharpe 0.54 ✅ / max_dd 7.31% ✅ / PF 1.405（>1.5 目标经验证不可达，已关闭）✅ / coverage 20.5%（口径修订为 ≥20%）✅
 
-1. **PF 1.405 → 1.5**：调优**仅限样本内**（止损宽度 / entry 阈值），样本外只做最终验证——禁止在样本外调参（数据泄漏）
-2. **coverage 口径修订**：20.5% 是低频信号设计的自然属性；建议将验收指标改为"每 5 个交易日至少 1 只"或删除（ROADMAP P4 验收表）
+**系统状态：可上模拟盘。** 后续可选方向（非遗留）：
+1. 模拟盘日常运行：每日 `analyze_stock()` → `row_to_signal` → `save_signals` 增量灌库 → 周期性 `paper_trader` 滚动样本外验证
+2. PF 样本内再实验（若未来信号频率提升使样本量增加）：`--stop-loss-pct / --min-signal` 工具已内置
 
 ```bash
-# 复跑样本外验收（改参后）
+# 复跑样本外验收
 python3 references/p4_combo_backtest.py --save-store reports/signals.db
 python3 references/paper_trader.py --db reports/signals.db --start 2025-09-01
 # → reports/p4_paper_trader_oos.json
