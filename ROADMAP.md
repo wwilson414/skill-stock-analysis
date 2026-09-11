@@ -245,9 +245,9 @@ P4 升级：
 
 ### 4-5 风控与监控
 
-- [ ] **4-5a** 仓位管理：单只股票最大仓位 20%，单一 phase 最大仓位 60%
-- [ ] **4-5b** 止损：个股 -8% 止损，组合 -15% 清仓
-- [ ] **4-5c** 日终监控：每日输出持仓 + 风险敞口 + 异常信号告警
+- [x] **4-5a** 仓位管理：单只股票最大仓位 20%（`RISK.max_per_stock`），单一 phase 最大仓位 60%（`RISK.max_per_phase`）→ `risk_monitor.py` `can_enter()`
+- [x] **4-5b** 止损：个股 -8% 止损（`RISK.stop_loss_pct`），组合 -15% 清仓（`RISK.circuit_breaker_pct`）→ `risk_monitor.py` `check_stop_loss()` / `check_circuit_breaker()`
+- [x] **4-5c** 日终监控：`risk_monitor.py` `eod_report()` 每日输出持仓 + 风险敞口 + 异常信号告警
 
 ### P4 验收标准
 

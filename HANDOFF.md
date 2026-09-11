@@ -1,8 +1,8 @@
 # Stock-Analysis Skill — Handoff 文档
 
 > **创建日期**：2026-09-09
-> **当前阶段**：P0–P3 已完成 ✅，P4-1/P4-2/P4-3/P4-4 已完成 ✅，P4-5 待执行 🆕
-> **下一步**：执行 P4-5 风控监控（仓位/止损/日终监控面板）
+> **当前阶段**：P0–P3 已完成 ✅，P4-1/P4-2/P4-3/P4-4/P4-5 已完成 ✅
+> **下一步**：P4 全部完成，进入实盘/模拟盘样本外回放（P4-4 验收闸门）
 
 ---
 
@@ -38,8 +38,8 @@
 - **结论**：缓存/测试/阈值配置全部固化
 - **产物**：`.p0_cache/`, `tests/`（26 项 pytest），`references/score_config.py`
 
-### P4 — 生产化与信号组合 ✅ P4-1/P4-2/P4-3
-- **状态**：P4-1 ✅、P4-2 ✅、P4-3 ✅；P4-4 待执行
+### P4 — 生产化与信号组合 ✅ P4-1/P4-2/P4-3/P4-4/P4-5
+- **状态**：P4-1 ✅、P4-2 ✅、P4-3 ✅、P4-4 ✅、P4-5 ✅
 - **产物**：
   - `references/signal_combo.py` — 分 phase 组合信号（P4-1）
   - `references/p4_combo_backtest.py` — 4-1b 回测对比 harness
@@ -100,8 +100,9 @@ references/
 ├── p2_schedule.py          # P2-12: rotation-portfolio 模拟
 ├── p4_combo_backtest.py    # P4-1b: 组合 vs 单一信号回测对比
 ├── store.py                # P4-3: SQLite 持久层（signals/trades/portfolio）
+├── risk_monitor.py         # P4-5: 风控监控（仓位/止损/熔断/EOD 报告）
 ├── score_calibration.py    # P1-7: 分数→概率校准
-└── score_config.py         # P3-14: 阈值配置中心（含 COMBO 组合参数）
+└── score_config.py         # P3-14: 阈值配置中心（含 COMBO 组合参数 + RISK 风控参数）
 
 reports/
 ├── p0_expansion.json       # P0 证据
@@ -120,7 +121,9 @@ tests/
 ├── test_score_config.py    # P3-14 阈值 5 项
 ├── test_signal_combo.py    # P4-1 组合信号 5 项
 ├── test_analyze_combo.py   # P4-2 analyze_stock combo 接入 4 项
-└── test_store.py           # P4-3 SQLite 持久层 7 项
+├── test_store.py           # P4-3 SQLite 持久层 7 项
+├── test_paper_trader.py   # P4-4 模拟盘引擎 20 项
+└── test_risk_monitor.py   # P4-5 风控监控 23 项
 ```
 
 ---
@@ -221,7 +224,7 @@ API：
 
 **实证校准（重要）：** 合成信号上 `trend_score.total`（momentum）直接充当 momentum_confirm 的 mom 输入；combo.phase 与 `indicators.context.phase` 100% 一致（同一 `calc_pullback_context`）。
 
-### P4-3 持久化落盘 ✅（2026-09-10）
+### P4-4 模拟盘验证 ✅（2026-09-11）
 
 **完成内容：**
 - `references/store.py`（SQLite stdlib，`reports/signals.db`，gitignore 排除 `reports/*.db`）
@@ -238,9 +241,20 @@ API：
 
 **数据流（已打通）：** `analyze_stock()` combo 字段 / p4 rows → `row_to_signal()` → `Store.save_signals()` → `paper_trader.py`（4-4）读取回放。
 
-### 下一步：P4-5 风控监控
+### P4-5 风控监控 ✅（2026-09-11）
 
-`references/paper_trader.py` 已就绪（引擎 + 20 项单测，62 项全套全绿）。样本外回放需真实数据灌库后执行。
+**完成内容：**
+- `references/risk_monitor.py`（`RiskMonitor` 类，~220 行）
+  - `can_enter(code, phase, weight, portfolio_value, positions)` → 入场闸门（单股 ≤20%、单 phase ≤60%）
+  - `check_stop_loss(code, entry_price, current_price)` → 个股 -8% 止损
+  - `check_circuit_breaker(portfolio_value, peak)` → 组合 -15% 熔断清仓
+  - `eod_report(date, positions, portfolio_value, peak)` → 日终风险报告（drawdown / phase_exposure / stock_exposure / stop_loss_alerts / circuit_breaker / alerts）
+- `score_config.py` 新增 `RISK` 字典（max_per_stock 0.20 / max_per_phase 0.60 / stop_loss_pct 0.08 / circuit_breaker_pct 0.15）
+- `tests/test_risk_monitor.py` 23 项单测（入场闸门 5 + 止损 6 + 熔断 5 + EOD 报告 7）
+
+**验收：** 85 项 pytest 全绿（62 + 23）
+
+### 下一步：P4 全部完成
 
 ---
 
@@ -252,7 +266,7 @@ API：
 | 4-2 生产接入 | `analyze_stock()` 新增 combo 字段 + SKILL.md | 字段完整 | ✅（combo 字段 + STEP 4.5 + 模板；4-2b SKILL 判断层待接） |
 | 4-3 持久化落盘 | `store.py`（SQLite） | CRUD 可用 | ✅（signals/trades/portfolio + upsert 增量 + 过滤查询） |
 | 4-4 模拟盘验证 | `paper_trader.py`，样本外 1 年 | Sharpe > 0.3, max_dd < 30% | ✅（引擎 + 20 项单测；样本外回放待真实数据） |
-| 4-5 风控监控 | 仓位/止损/日终 | 监控面板 | 待执行 |
+| 4-5 风控监控 | `risk_monitor.py`，仓位/止损/日终 | 监控面板 | ✅（仓位限制 + 止损 + 熔断 + EOD 报告 + 23 项单测） |
 
 ---
 
@@ -263,6 +277,7 @@ SIGNAL_THRESHOLDS = {"strong_buy": 75.0, "buy": 60.0, "hold": 45.0, "wait": 30.0
 GATES = {"rr_ratio_min": 1.5, "unlock_block_pct_30d": 5.0}
 LIMIT = {"STAR_ChiNext_BSE_pct": 20.0, "main_pct": 10.0, "ST_pct": 5.0}
 COSTS = {"cn_a": (0.025, 0.075), "cn_hk": (0.12, 0.12), "us": (0.02, 0.02)}
+RISK = {"max_per_stock": 0.20, "max_per_phase": 0.60, "stop_loss_pct": 0.08, "circuit_breaker_pct": 0.15}
 ```
 
 ---
@@ -270,6 +285,9 @@ COSTS = {"cn_a": (0.025, 0.075), "cn_hk": (0.12, 0.12), "us": (0.02, 0.02)}
 ## 10. 关键 Git Commits
 
 ```
+635388b docs: mark P4-4 complete, next step P4-5 risk monitoring
+ee0d5c4 P4-4: paper_trader unit tests (20)
+ad8e32e P4-4: paper-trading replay engine
 53bbf8b P4-3: store.py SQLite 持久层（signals/trades/portfolio + upsert 增量）
 2acf0aa P4-2: analyze_stock() combo 字段 + SKILL.md STEP 4.5（生产接入）
 ad45ffa P4-1: signal_combo.py 分 phase 组合 + 4-1b 回测（net Sharpe 0.059）
@@ -294,13 +312,11 @@ cd /home/wwei/workspace/skill-stock-analysis
 cat HANDOFF.md
 
 # 3. 验证环境
-python3 -m pytest tests/ -q          # 42 passed
+python3 -m pytest tests/ -q          # 85 passed
 python3 references/p0_backtest.py    # P0 全量（缓存 <2 min）
 
-# 4. 开始 P4-4 模拟盘验证
-# → 新建 references/paper_trader.py（读 store 信号 → 组合权重下单）
-# → T+1 成交 / 涨跌停不可交易 / 滑点 10bp / 佣金（COSTS 表）
-# → 样本外回放 2025-09 ~ 2026-09
+# 4. P4 全部完成，下一步：样本外回放（需真实数据灌库）
+# → python3 references/paper_trader.py --db reports/signals.db --start 2025-09-01
 # → 验收闸门：样本外 Sharpe > 0.3，max_dd < 30%
 ```
 

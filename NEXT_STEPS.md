@@ -1,7 +1,7 @@
 # Stock-Analysis Skill — 执行交接文档
 >
-> 最后更新：2026-09-10
-> 当前阶段：P0–P3 已完成，P4-1/P4-2/P4-3 已完成，P4-4 待执行
+> 最后更新：2026-09-11
+> 当前阶段：P0–P3 已完成，P4-1/P4-2/P4-3/P4-4/P4-5 已完成
 >
 ---
 >
@@ -13,7 +13,7 @@
 | P1 信号质量 | ✅ | mr_score 下跌段 IC+0.034；comp_vol 非下跌段 IC+0.046；总分无概率信息 | `mr_signal.py`, `p1_eval.py`, `score_calibration.py` |
 | P2 执行真实性 | ✅ | comp_vol 唯一穿越费用（net +9.6%，Sharpe 0.046）；动量负 IC 非执行伪影 | `p2_execution.py`, `p2_schedule.py` |
 | P3 工程维护 | ✅ | 缓存/测试/阈值配置全部固化 | `.p0_cache/`, `tests/`, `score_config.py` |
-| P4 生产化 | ✅ P4-1/2/3 | 组合信号 net Sharpe 0.059 > comp_vol 0.046；`analyze_stock()` 输出 `combo` 字段；SQLite 持久层 signals/trades/portfolio | `signal_combo.py`, `p4_combo_backtest.py`, `store.py` + 3 组测试 |
+| P4 生产化 | ✅ P4-1/2/3/4/5 | 组合信号 net Sharpe 0.059 > comp_vol 0.046；`analyze_stock()` 输出 `combo` 字段；SQLite 持久层；模拟盘引擎；风控监控 | `signal_combo.py`, `p4_combo_backtest.py`, `store.py`, `paper_trader.py`, `risk_monitor.py` + 5 组测试 |
 >
 ---
 >
@@ -54,7 +54,7 @@
 2. **4-2 生产接入** → 升级 `analyze_stock()` + SKILL.md ✅ 已完成
 3. **4-3 持久化落盘** → `references/store.py`（SQLite）✅ 已完成
 4. **4-4 模拟盘验证** → `references/paper_trader.py` ✅ 已完成
-5. **4-5 风控监控** → 仓位/止损/日终
+5. **4-5 风控监控** → `references/risk_monitor.py` ✅ 已完成
 
 ### 4-1 完成记录（2026-09-10）
 
@@ -93,14 +93,31 @@
 
 **验收：** CRUD 可用 ✅ + `pytest` 42 项全绿
 
-### 4-4 详细设计（待实现）
+### 4-4 完成记录（2026-09-11）
 
-**文件：** `references/paper_trader.py`
+`references/paper_trader.py`（~400 行）——日循环回放引擎：
+- T+1 成交（信号日 t → 次日 t+1 open 填单）
+- 涨停封板跳过（open ≥ prev_close×(1+th−0.2pp) → 跳过并计数）
+- 跌停封板滚仓（close ≤ last_close×(1−th+0.2pp) → 延迟最多 5 天）
+- 费用：`COSTS[market]` 佣金 + slippage bp/边（entry & exit 双向）
+- 仓位：`(1/max_positions) × combo_weight`（uptrend 1.0 / range 0.5 / downtrend 0.3）
+- 绩效：Sharpe / max_dd / hit_rate / annual_ret / annual_vol
+- 持久化：可选 `Store` 落盘 trades + portfolio snapshots
+- `tests/test_paper_trader.py` 20 项单测
 
-- 读取 `store.py` signals（或实时喂入）→ 按 combo 权重组合下单 → 跟踪持仓 → 日终 PnL
-- 执行约束：T+1 成交、涨跌停不可交易（复用 `calc_tradability` 逻辑）、滑点 10bp、佣金（`score_config.COSTS`）
-- 回放窗口：样本外 2025-09 ~ 2026-09（1 年）
-- **验收闸门：样本外 Sharpe > 0.3，max_dd < 30%**；4-1c net Sharpe 0.08 差额靠执行费用/频率调优
+**验收：** 引擎就绪 ✅（demo 冒烟 + 62 项 pytest 全绿）；样本外回放待真实数据灌库
+
+### 4-5 完成记录（2026-09-11）
+
+`references/risk_monitor.py`（`RiskMonitor` 类，~220 行）：
+- `can_enter(code, phase, weight, portfolio_value, positions)` → 入场闸门（单股 ≤20%、单 phase ≤60%）
+- `check_stop_loss(code, entry_price, current_price)` → 个股 -8% 止损
+- `check_circuit_breaker(portfolio_value, peak)` → 组合 -15% 熔断清仓
+- `eod_report(date, positions, portfolio_value, peak)` → 日终风险报告
+- `score_config.py` 新增 `RISK` 字典
+- `tests/test_risk_monitor.py` 23 项单测
+
+**验收：** 85 项 pytest 全绿（62 + 23）
 
 ---
 
@@ -117,8 +134,10 @@ references/
 ├── p2_schedule.py          # P2-12: rotation-portfolio 模拟
 ├── p4_combo_backtest.py    # P4-1b: 组合 vs 单一信号回测
 ├── store.py                # P4-3: SQLite 持久层（signals/trades/portfolio）
+├── paper_trader.py         # P4-4: 模拟盘回放引擎
+├── risk_monitor.py         # P4-5: 风控监控（仓位/止损/熔断/EOD 报告）
 ├── score_calibration.py    # P1-7: 分数→概率校准
-└── score_config.py         # P3-14: 阈值配置中心（含 COMBO）
+└── score_config.py         # P3-14: 阈值配置中心（含 COMBO + RISK）
 
 reports/
 ├── p0_expansion.json       # P0 证据
@@ -137,7 +156,9 @@ tests/
 ├── test_score_config.py    # P3-14 阈值 5 项
 ├── test_signal_combo.py    # P4-1 组合信号 5 项
 ├── test_analyze_combo.py   # P4-2 analyze_stock combo 接入 4 项
-└── test_store.py           # P4-3 SQLite 持久层 7 项
+├── test_store.py           # P4-3 SQLite 持久层 7 项
+├── test_paper_trader.py   # P4-4 模拟盘引擎 20 项
+└── test_risk_monitor.py   # P4-5 风控监控 23 项
 ```
 
 ---
@@ -183,8 +204,14 @@ python3 -m pytest tests/ -q
 
 ## 7. 下次执行入口
 
-**立即开始 4-5 风控监控：**
+**P4 全部完成。** 下一步：样本外回放（需真实数据灌库）。
 
-1. 仓位管理：单只股票最大仓位 20%（`max_positions>=5` 已隐含），单一 phase 最大仓位 60%
-2. 止损：个股 -8% 止损，组合 -15% 清仓
-3. 日终监控：每日输出持仓 + 风险敞口 + 异常信号告警
+```bash
+# 灌库（从 p4_combo_backtest 输出）
+python3 references/p4_combo_backtest.py --save-store
+
+# 样本外回放
+python3 references/paper_trader.py --db reports/signals.db --start 2025-09-01
+
+# 验收闸门：样本外 Sharpe > 0.3，max_dd < 30%
+```
