@@ -1,7 +1,7 @@
 # Stock-Analysis Skill — 执行交接文档
 >
 > 最后更新：2026-09-11
-> 当前阶段：P0–P3 已完成，P4-1/P4-2/P4-3/P4-4/P4-5 已完成
+> 当前阶段：P0–P3 已完成；**P4 未全部完成**——4-1/2/3 ✅，4-4/4-5 ⚠️（引擎/独立类就绪，集成与验收待做）
 >
 ---
 >
@@ -13,7 +13,7 @@
 | P1 信号质量 | ✅ | mr_score 下跌段 IC+0.034；comp_vol 非下跌段 IC+0.046；总分无概率信息 | `mr_signal.py`, `p1_eval.py`, `score_calibration.py` |
 | P2 执行真实性 | ✅ | comp_vol 唯一穿越费用（net +9.6%，Sharpe 0.046）；动量负 IC 非执行伪影 | `p2_execution.py`, `p2_schedule.py` |
 | P3 工程维护 | ✅ | 缓存/测试/阈值配置全部固化 | `.p0_cache/`, `tests/`, `score_config.py` |
-| P4 生产化 | ✅ P4-1/2/3/4/5 | 组合信号 net Sharpe 0.059 > comp_vol 0.046；`analyze_stock()` 输出 `combo` 字段；SQLite 持久层；模拟盘引擎；风控监控 | `signal_combo.py`, `p4_combo_backtest.py`, `store.py`, `paper_trader.py`, `risk_monitor.py` + 5 组测试 |
+| P4 生产化 | ⚠️ 1/2/3 ✅，4/5 ⚠️ | 组合信号 net Sharpe 0.059 > comp_vol 0.046；`analyze_stock()` 输出 `combo` 字段；SQLite 持久层；引擎+独立类就绪 | `signal_combo.py`, `p4_combo_backtest.py`, `store.py`, `paper_trader.py`, `risk_monitor.py` + 5 组测试；**盈亏比/覆盖率未实现，RiskMonitor 未接入引擎，4-4c 未验收**（详见 HANDOFF §7.5） |
 >
 ---
 >
@@ -204,14 +204,18 @@ python3 -m pytest tests/ -q
 
 ## 7. 下次执行入口
 
-**P4 全部完成。** 下一步：样本外回放（需真实数据灌库）。
+**P4 未全部完成。** 按 HANDOFF §7.5 优先级补齐（先代码后验收）：
 
 ```bash
-# 灌库（从 p4_combo_backtest 输出）
-python3 references/p4_combo_backtest.py --save-store
+# --- 代码补齐（按 HANDOFF §7.5：3 → 2 → 4 → 1）---
+# 3) RiskMonitor 接入 paper_trader 引擎：止损(-8%) / 熔断(-15%) / 仓位限制(单股20%/单phase60%)
+#    目前 paper_trader.py 0 处调用 risk_monitor —— 止损/熔断在真实回放中从未生效
+# 2) _performance() 增加 profit_factor（盈亏比 > 1.5 闸门指标）
+# 4) coverage_pct（信号覆盖率 > 60% 闸门指标）
 
-# 样本外回放
+# --- 全量灌库 + 样本外回放验收（依赖上一步完成后才有意义）---
+python3 references/p4_combo_backtest.py --save-store reports/signals.db
 python3 references/paper_trader.py --db reports/signals.db --start 2025-09-01
 
-# 验收闸门：样本外 Sharpe > 0.3，max_dd < 30%
+# 验收闸门：样本外 Sharpe > 0.3，max_dd < 30%，盈亏比 > 1.5，覆盖率 > 60%
 ```
