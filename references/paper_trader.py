@@ -454,7 +454,9 @@ def main():
     ap.add_argument("--max-positions", type=int, default=5)
     ap.add_argument("--hold", type=int, default=20)
     ap.add_argument("--slippage-bp", type=float, default=10.0)
-    ap.add_argument("--days", type=int, default=1000, help="price history bars")
+    ap.add_argument("--days", type=int, default=900,
+                    help="price history bars (900 matches the p4 harness "
+                         "cache key -> instant cache hits)")
     ap.add_argument("--out", default="reports/p4_paper_trader.json")
     ap.add_argument("--persist", action="store_true",
                     help="write trades/portfolio snapshots into the store")
