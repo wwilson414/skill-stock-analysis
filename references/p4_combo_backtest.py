@@ -18,7 +18,10 @@ Verification (P4-1c, in reports/p4_combo_backtest.json):
 Usage
   python3 references/p4_combo_backtest.py
   python3 references/p4_combo_backtest.py --limit 6 --parallel 2   # smoke
-Output: reports/p4_combo_backtest.json
+  python3 references/p4_combo_backtest.py --save-store reports/signals.db
+      # also persist every combo signal row into the P4-3 SQLite store,
+      # so paper_trader.py (P4-4) can replay the out-of-sample gate.
+Output: reports/p4_combo_backtest.json (+ signals.db when --save-store)
 """
 
 import argparse
@@ -237,6 +240,9 @@ def main():
     ap.add_argument("--slippage-bp", type=int, default=10)
     ap.add_argument("--parallel", type=int, default=6)
     ap.add_argument("--out", type=str, default="reports/p4_combo_backtest.json")
+    ap.add_argument("--save-store", default=None,
+                    help="SQLite path to persist combo signal rows "
+                         "(P4-3 store, e.g. reports/signals.db)")
     ap.add_argument("--no-cache", action="store_true")
     args = ap.parse_args()
 
@@ -271,6 +277,27 @@ def main():
     with open(args.out, "w") as f:
         json.dump(out, f, ensure_ascii=False, indent=1)
     _log(f"[p4b] written -> {args.out}")
+
+    if args.save_store:
+        _save_rows_to_store(rows, args.save_store)
+
+
+def _save_rows_to_store(rows: list, db: str) -> None:
+    """Persist combo signal rows into the P4-3 SQLite store (upsert).
+
+    Every rebuilt row (including warmup days with combo_signal=None) is mapped
+    by store.row_to_signal and upserted on (date, code) — re-running the
+    harness never duplicates history. Gate-blocked bars are kept as rows with
+    gate_blocked=1 so paper_trader can account for skipped candidates.
+    """
+    from store import Store
+    for r in rows:
+        r.setdefault("source", "p4_backtest")
+    with Store(db) as st:
+        n = st.save_signals(rows)
+        latest = st.latest_signal_date()
+    _log(f"[p4b] saved {n} rows -> {db}")
+    _log(f"[p4b]   latest_signal_date: {latest}")
 
 
 if __name__ == "__main__":
