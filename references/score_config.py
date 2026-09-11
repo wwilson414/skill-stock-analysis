@@ -57,6 +57,12 @@ COSTS = {                           # per-side, percent of notional
     "us": (0.02, 0.02),
     "slippage_bp_default": 10.0,
 }
+RISK = {                            # P4-5: risk monitoring thresholds
+    "max_per_stock": 0.20,          # single stock max 20% of portfolio
+    "max_per_phase": 0.60,          # single phase max 60% of portfolio
+    "stop_loss_pct": 0.08,          # individual stock -8% stop-loss
+    "circuit_breaker_pct": 0.15,    # portfolio -15% from peak -> liquidate all
+}
 FORWARD = {"days": [5, 10, 20]}
 CACHE_LIFESPAN_DAYS = 3
 TESTS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)),
