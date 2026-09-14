@@ -58,11 +58,11 @@ User input (stock ticker/name)
 | 6 digits (starts with 6/0/3) | A-share | 600519, 000001, 300750 | THS Official API/THS/akshare |
 | HK + 5 digits | HK stocks | HK00700, HK09988 | efinance/akshare/Tencent Finance |
 | 1-5 uppercase letters | US stocks | AAPL, TSLA, PLTR | Tencent Finance/yfinance |
-| Chinese company name (requires HITHINK_FINANCE_API_KEY) | A-share | Kweichow Moutai | THS Official API search |
+| Chinese company name (THS search w/ key; free akshare name-table fallback) | A-share | Kweichow Moutai | THS Official API search → akshare |
 
 ### Processing Logic
 - Multiple stocks separated by commas, spaces, or newlines
-- If user inputs Chinese company name (e.g., "Kweichow Moutai"): When `HITHINK_FINANCE_API_KEY` is configured, the script uses THS official ticker search to auto-parse; otherwise use WebSearch first to find the corresponding ticker
+- If user inputs Chinese company name (e.g., "Kweichow Moutai"): When `HITHINK_FINANCE_API_KEY` is configured, the script uses THS official ticker search to auto-parse (transient HTTP 429/5xx are retried with backoff inside the script); if that fails — or no key is configured — the script falls back to a free akshare A-share code-name table (exact name match first, then an unambiguous substring match), so plain Chinese names usually resolve without any key; as a last resort use WebSearch to find the corresponding ticker
 - Credential passing strategy: Key uses unified variable `HITHINK_FINANCE_API_KEY` (shared by REST/MCP/CLI/Python). If the running client (e.g., Claude Desktop, Cursor, or another AI coding agent) does not inherit user-level environment variables, the Agent should write the Key from the configured unified credential source to the client's Secret/credential function, **without requiring user to re-provide**; when the client does not support environment variable interpolation, use its built-in Secret/credential storage
 - Remove possible suffixes (.SH/.SZ/.SS) or prefixes (SH/SZ)
 

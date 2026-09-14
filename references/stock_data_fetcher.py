@@ -29,6 +29,7 @@ Environment variables (optional, for enhanced data):
 import os
 import sys
 import json
+import time
 import argparse
 import warnings
 from datetime import datetime, timedelta
@@ -422,8 +423,14 @@ def _ths_api_key() -> str:
 
 
 def _fuyao_get(path: str, params: dict = None) -> dict:
-    """GET THS Official API, carries X-api-key authentication, returns ApiResponse envelope."""
+    """GET THS Official API, carries X-api-key authentication, returns ApiResponse envelope.
+
+    Transient HTTP 429/5xx are retried with short backoff (respects Retry-After when
+    present, capped at 6s); network-level blips (URLError/timeout) get one extra
+    attempt. Persistent failures raise on the final attempt.
+    """
     import json as _json
+    import urllib.error
     import urllib.parse
     import urllib.request
     key = _ths_api_key()
@@ -437,8 +444,33 @@ def _fuyao_get(path: str, params: dict = None) -> dict:
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "application/json",
     })
-    with urllib.request.urlopen(req, timeout=12) as resp:
-        return _json.loads(resp.read().decode("utf-8", errors="replace"))
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                return _json.loads(resp.read().decode("utf-8", errors="replace"))
+        except urllib.error.HTTPError as e:
+            # HTTPError subclasses URLError/OSError — must be handled first.
+            if e.code in (429, 502, 503, 504) and attempt < max_attempts:
+                wait = 1.5 * attempt
+                ra = e.headers.get("Retry-After") if getattr(e, "headers", None) else None
+                if ra:
+                    try:
+                        wait = max(wait, min(float(ra), 6.0))
+                    except (TypeError, ValueError):
+                        pass
+                _log(f"THS API {path} HTTP {e.code} (attempt {attempt}/{max_attempts}), retrying in {wait:.1f}s")
+                time.sleep(wait)
+                continue
+            raise
+        except (urllib.error.URLError, TimeoutError) as e:
+            # Network blips (timeout/DNS reset): a single quick extra attempt, then give up.
+            if attempt < 2:
+                _log(f"THS API {path} network error (attempt {attempt}/2): {e}; retrying in 1.5s")
+                time.sleep(1.5)
+                continue
+            raise
+    raise RuntimeError(f"THS API {path}: retries exhausted")
 
 
 def _fuyao_thscode(code: str) -> str:
@@ -1152,11 +1184,23 @@ def fetch_us(code: str, days: int) -> dict:
 # SECTION 2.5: News Search (optional, with graceful degradation)
 # ============================================================
 
+def _clean_news_field(v) -> str:
+    """Normalize a news field: None/NaN/'nan'/'None' -> '', strip whitespace."""
+    s = str(v).strip() if v is not None else ""
+    return "" if s.lower() in ("none", "nan") else s
+
+
 def _fetch_news_akshare(code: str, max_results: int = 5) -> list:
     """A-share individual stock news via akshare East Money (stock_news_em). Free, no API Key required.
 
     Returns list of {"title", "content", "url", "date", "source", "publisher"},
     Sorted by release time descending. Only supports A-share 6-digit codes.
+
+    Robustness: current akshare returns Chinese column names (新闻标题/新闻内容/...),
+    older builds / doc examples use English aliases — both are accepted via a per-row
+    alias lookup. Rows whose title/content/url are all empty (blank placeholder
+    payloads) are dropped, and [] is returned when nothing usable remains so the
+    caller can retry / fall through to the next source.
     """
     import akshare as ak
     df = ak.stock_news_em(symbol=code)
@@ -1165,13 +1209,25 @@ def _fetch_news_akshare(code: str, max_results: int = 5) -> list:
     rows = []
     for _, r in df.iterrows():
         try:
+            def _field(*aliases):
+                for a in aliases:
+                    v = _clean_news_field(r.get(a))
+                    if v:
+                        return v
+                return ""
+
+            title = _field("新闻标题", "news title", "title")
+            content = _field("新闻内容", "newscontent", "content").replace("\n", " ")[:200]
+            url = _field("新闻链接", "newslink", "url")
+            if not (title or content or url):
+                continue  # blank placeholder row from East Money
             rows.append({
-                "title": str(r.get("news title", "")).strip(),
-                "content": str(r.get("newscontent", "")).strip().replace("\n", " ")[:200],
-                "url": str(r.get("newslink", "")).strip(),
-                "date": str(r.get("releasetime", "")).strip(),
+                "title": title,
+                "content": content,
+                "url": url,
+                "date": _field("发布时间", "releasetime", "datetime", "date"),
                 "source": "akshare-em",
-                "publisher": str(r.get("article source", "")).strip() or "East Money",
+                "publisher": _field("文章来源", "article source", "source") or "East Money",
             })
         except Exception:
             continue
@@ -1186,15 +1242,26 @@ def search_news(stock_name: str, code: str, max_results: int = 5, market: str = 
       HK/US: Tavily > SerpAPI > empty
     Returns list of {"title": ..., "content": ..., "url": ..., "date": ..., "source": ...}
     """
-    # Priority 0: akshare East Money individual stock news (A-share exclusive, free, no key)
+    # Priority 0: akshare East Money individual stock news (A-share exclusive, free, no key).
+    # East Money occasionally returns a transient blank/garbage payload (observed: rows
+    # with all-empty fields), so one short pause + retry before falling through to
+    # Tavily/SerpAPI.
     if market == "cn_a" and _check_source("akshare"):
-        try:
-            results = _fetch_news_akshare(code, max_results)
+        last_err = None
+        for attempt in (1, 2):
+            try:
+                results = _fetch_news_akshare(code, max_results)
+            except Exception as e:
+                last_err, results = e, []
             if results:
                 _log(f"[{code}] News via akshare/East Money ({len(results)} results)")
                 return results
-        except Exception as e:
-            _log(f"[{code}] akshare news failed: {e}")
+            if attempt == 1:
+                time.sleep(1.5)  # blank payloads are usually transient; brief pause then retry
+        if last_err is not None:
+            _log(f"[{code}] akshare news failed after retry: {last_err}")
+        else:
+            _log(f"[{code}] akshare news blank after retry, falling through to next source")
 
     # Priority 1: Tavily
     tavily_key = os.environ.get("TAVILY_API_KEY")
@@ -2203,11 +2270,53 @@ def calc_trend_score(ma_data: dict, macd_data: dict, rsi_data: dict,
 # SECTION 5: Main Orchestrator
 # ============================================================
 
+def _has_cjk(text: str) -> bool:
+    """True if the string contains CJK Unified Ideographs (i.e. looks like a Chinese name)."""
+    return any("\u4e00" <= ch <= "\u9fff" for ch in text)
+
+
+def _resolve_cn_name_akshare(name: str):
+    """Resolve a Chinese company name to an A-share code via akshare's free code-name table.
+
+    Independent of the THS key: exact match first, then a substring match only when
+    it resolves to exactly one candidate (ambiguous matches are refused, not guessed).
+    Returns (code, matched_name) or None. Best-effort: logs and returns None on any
+    failure, never raises.
+    """
+    try:
+        import akshare as ak
+        df = ak.stock_info_a_code_name()
+        if df is None or df.empty:
+            _log(f"[{name}] akshare code-name table empty")
+            return None
+        table = {}
+        for _, r in df.iterrows():
+            nm = str(r.get("name", "")).strip()
+            cd = str(r.get("code", "")).strip()
+            if nm and cd:
+                table[nm] = cd
+        if name in table:
+            return table[name], name
+        partial = {nm: cd for nm, cd in table.items() if name in nm}
+        if len(partial) == 1:
+            nm, cd = next(iter(partial.items()))
+            return cd, nm
+        if len(partial) > 1:
+            _log(f"[{name}] akshare name table ambiguous: {len(partial)} hits, refusing to guess")
+        return None
+    except Exception as e:
+        _log(f"[{name}] akshare code-name table lookup failed: {type(e).__name__}: {e}")
+        return None
+
+
 def analyze_stock(code: str, days: int = 120, fetch_news: bool = False) -> dict:
     """Full analysis pipeline for a single stock."""
     market, normalized, display = classify_stock(code)
 
-    # Chinese company name parsing: prioritize THS official ticker search for disambiguation (requires HITHINK_FINANCE_API_KEY)
+    # Chinese company name parsing: prioritize THS official ticker search for disambiguation
+    # (requires HITHINK_FINANCE_API_KEY). Transient 429/5xx/network errors are retried
+    # inside _fuyao_get; on final failure fall back to the free akshare code-name table
+    # so a plain Chinese name still resolves.
     if market == "unknown" and _ths_api_key():
         try:
             hits = _search_fuyao(code)
@@ -2220,6 +2329,15 @@ def analyze_stock(code: str, days: int = 120, fetch_news: bool = False) -> dict:
                 _log(f"[{code}] THS Official API parsed as {thscode} ({a_share[0].get('name', '')})")
         except Exception as e:
             _log(f"[{code}] THS Official API ticker search failure: {e}")
+
+    # Fallback: resolve Chinese company names via akshare's free code-name table
+    # (works even without any API key configured).
+    if market == "unknown" and _has_cjk(code):
+        resolved = _resolve_cn_name_akshare(code)
+        if resolved:
+            normalized, display = resolved
+            market = "cn_a"
+            _log(f"[{code}] Resolved via akshare A-share name table: {normalized} ({display})")
 
     if market == "unknown":
         raise ValueError(f"Cannot classify stock code: {code}")
