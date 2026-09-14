@@ -2309,6 +2309,47 @@ def _resolve_cn_name_akshare(name: str):
         return None
 
 
+def _ensure_reference_modules() -> bool:
+    """Make sibling harness modules (signal_combo / mr_signal / score_config) importable
+    even when this script is copied alone out of references/ (e.g. to /tmp per SKILL.md STEP 2).
+
+    Probe order (first dir containing signal_combo.py wins, inserted at the front of
+    sys.path):
+      1. $SDF_REFERENCES_DIR (explicit override)
+      2. directory of this script (normal in-repo case)
+      3. <script_dir>/references
+      4. <cwd>/references
+      5. walk up from cwd checking each level's references/ (nested workspaces)
+    Returns True when signal_combo.py was located and made importable.
+    """
+    try:
+        import signal_combo  # noqa: F401
+        return True  # already importable (in-repo or previously probed)
+    except ImportError:
+        pass
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.environ.get("SDF_REFERENCES_DIR"),
+        script_dir,
+        os.path.join(script_dir, "references"),
+        os.path.join(os.getcwd(), "references"),
+    ]
+    probe = os.getcwd()
+    for _ in range(4):
+        candidates.append(os.path.join(probe, "references"))
+        parent = os.path.dirname(probe)
+        if parent == probe:
+            break
+        probe = parent
+    for d in candidates:
+        if d and os.path.isfile(os.path.join(d, "signal_combo.py")):
+            if d not in sys.path:
+                sys.path.insert(0, d)
+            _log(f"harness module signal_combo.py located at {d}")
+            return True
+    return False
+
+
 def analyze_stock(code: str, days: int = 120, fetch_news: bool = False) -> dict:
     """Full analysis pipeline for a single stock."""
     market, normalized, display = classify_stock(code)
@@ -2406,7 +2447,16 @@ def analyze_stock(code: str, days: int = 120, fetch_news: bool = False) -> dict:
     # (signal_combo imports calc_ma / calc_pullback_context from this module).
     combo = None
     try:
-        from signal_combo import compute_combo_signal
+        try:
+            from signal_combo import compute_combo_signal
+        except ImportError:
+            # Script copied alone out of references/ (e.g. to /tmp): probe for the
+            # sibling harness modules before giving up (combo degrades gracefully).
+            if not _ensure_reference_modules():
+                _log(f"[{code}] combo signal skipped: signal_combo not found "
+                     f"(set SDF_REFERENCES_DIR to the references/ dir to enable)")
+                raise
+            from signal_combo import compute_combo_signal
         mom_scores = [None] * len(valid_bars)
         mom_scores[-1] = score.get("total") if score else None
         combo = compute_combo_signal(valid_bars, mom_scores=mom_scores)

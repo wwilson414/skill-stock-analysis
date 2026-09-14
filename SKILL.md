@@ -100,6 +100,7 @@ Write -> /tmp/stock_data_fetcher.py
 ```bash
 python3 /tmp/stock_data_fetcher.py --stocks "CODE1,CODE2,CODE3" --news
 ```
+   - P4 combo modules (`signal_combo.py` etc.) are auto-located: the script probes `$SDF_REFERENCES_DIR` → its own dir → `<script_dir>/references` → `<cwd>/references` → upward walk. When running the lone copy from the repo root (typical), combo output is full; from elsewhere with no probe hit, the `combo` field degrades gracefully to `null` (set `SDF_REFERENCES_DIR=<repo>/references` to force-enable)
 
 4. If ImportError occurs (missing dependencies), auto-install and retry:
 ```bash

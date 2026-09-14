@@ -170,6 +170,7 @@ python3 -m pytest tests/ -q
 - 缓存 `.p0_cache/` 已 gitignore，冷启动 <2 分钟
 - THS fuyao API 偶发 HTTP 429（短窗口限流，苏泊尔实测复现）→ `_fuyao_get` 已加 429/5xx 退避重试（≤3 次、尊重 Retry-After、上限 6s）+ 网络错误补 1 次；中文名检索最终失败时回退 akshare 免费代码表（精确匹配，多命中不猜测）
 - akshare `stock_news_em` 实际返回**中文列名**（新闻标题/新闻内容/…），脚本旧代码按英文列名取值 → 恒为空串（2026-09-14 苏泊尔实测定位）；已改列名别名兼容 + 空载荷行过滤 + `search_news` 内空结果重试 1 次再降级
+- 脚本被单独拷出 references/（如 /tmp）时 `signal_combo` 导入失败 → combo 静默 null；已加 `_ensure_reference_modules()` 自动探测（`$SDF_REFERENCES_DIR` → 脚本目录 → `<script>/references` → `<cwd>/references` → 向上逐级），repo 根目录运行即可完整输出 combo；找不到时日志明示跳过原因
 
 ---
 
