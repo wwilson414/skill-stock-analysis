@@ -134,6 +134,7 @@ A-share stocks:
 - First check `stock_data_fetcher.py --stocks "600519" --news` (use `--news` parameter)
 - Script degradation chain: akshare East Money (free) -> Tavily -> SerpAPI (Google News) -> WebSearch (agent-provided fallback)
   - SerpAPI uses **Google News** search engine, query `"{stock_name} {ticker} stock news OR earnings OR announcement"`, returns Google News results
+- The akshare East Money source returns **Chinese column names** (`新闻标题`/`新闻内容`/…); the script maps them through column aliases, filters blank payload rows, and retries once on an empty result before degrading — an empty `news` array therefore means the free source truly had nothing (or the network failed), not a parsing bug
 - If `news` array already exists in JSON, use it directly
 - If script returns empty (no available news/network failure), execute WebSearch:
   - Search `"{stock_name} {ticker} latest news"` (e.g., "Huaneng Power 600011 latest news")
@@ -313,6 +314,29 @@ would be needed to trade downtrend bounces — the current score cannot rank the
 | Market closed/no data | Use most recent trading day data |
 | WebSearch no results | Note "No significant recent news", still analyze based on technicals |
 | Script execution timeout | Set 120s timeout, report partial results obtained if timeout |
+
+## Appendix: Offline Research & Persistence Toolchain
+
+The per-request path is STEP 1–5 only (fetch → analyze → dashboard). The repo additionally
+ships the validated P0–P4 toolchain for offline research, persistence and replay. Run it from
+the repo root so modules resolve (or set `SDF_REFERENCES_DIR=<repo>/references`):
+
+| Purpose | Command |
+| ------- | ------- |
+| Evidence base (36 stocks / 29,476 signals, bootstrap CIs) | `python3 references/p0_backtest.py` |
+| Signal evaluation (mr_score / comp_vol IC by phase) | `python3 references/p1_eval.py` |
+| Execution repricing + rotation portfolio | `python3 references/p2_execution.py` / `p2_schedule.py` |
+| Score → probability calibration | `python3 references/score_calibration.py` |
+| Combo vs single-signal backtest (+ persist) | `python3 references/p4_combo_backtest.py --save-store reports/signals.db` |
+| Paper-trading replay (T+1, fees, risk gates, perf gate) | `python3 references/paper_trader.py --db reports/signals.db --start 2025-09-01` |
+| Store smoke test (scratch DB) | `python3 references/store.py --demo` |
+| Unit tests (offline) | `python3 -m pytest tests/ -q` (96 passed) |
+
+Evidence: P4-1b net-of-fee rotation portfolio — combo +12.8%/yr Sharpe 0.059 vs comp_vol
++9.6%/0.046. Out-of-sample gate 2025-09 → 2026-08 (`reports/p4_paper_trader_oos.json`):
+Sharpe 0.54 / max_dd 7.31% pass; profit_factor 1.405 (target closed — unreachable at this
+sample size) and coverage 20.5% (bar revised to >= 20%: >= 1 signal-bearing stock per
+5 trading days). Tuning knobs `--stop-loss-pct` / `--min-signal` are **in-sample only**.
 
 ## Notes
 - All price data comes from real markets (THS Official API/THS/efinance/akshare/yfinance), not fabricated

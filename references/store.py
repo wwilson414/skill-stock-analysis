@@ -19,12 +19,14 @@ Conventions
   -> row_to_signal() -> Store.save_signals() -> paper_trader.py (P4-4) replay.
 
 Usage
-  python3 references/store.py --db reports/signals.db --demo   # smoke
+  python3 references/store.py --demo                    # hermetic smoke (/tmp scratch db)
+  python3 references/store.py --db reports/signals.db   # inspect the pipeline db
 """
 
 import argparse
 import os
 import sqlite3
+import tempfile
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS signals (
@@ -242,13 +244,23 @@ def _demo(db_path: str):
 
 def main():
     ap = argparse.ArgumentParser(description="P4-3 SQLite store smoke")
-    ap.add_argument("--db", default="reports/signals.db")
+    ap.add_argument("--db", default=None,
+                    help="SQLite path (default: reports/signals.db); with "
+                         "--demo the default is a scratch file in /tmp")
     ap.add_argument("--demo", action="store_true")
     args = ap.parse_args()
     if args.demo:
-        _demo(args.db)
+        # The demo asserts exact row counts for 600519, which only hold on a
+        # scratch database — never touch the pipeline db unless --db was given
+        # explicitly (a populated reports/signals.db would fail the assert).
+        db = args.db
+        if db is None:
+            db = os.path.join(tempfile.gettempdir(), "store_demo.db")
+            if os.path.exists(db):
+                os.remove(db)
+        _demo(db)
     else:
-        print(f"db: {args.db} (use --demo for a smoke run)")
+        print(f"db: {args.db or 'reports/signals.db'} (use --demo for a smoke run)")
 
 
 if __name__ == "__main__":

@@ -228,6 +228,10 @@ def main():
     ap.add_argument("--max-positions", type=int, default=5)
     ap.add_argument("--hold", type=int, default=20)
     ap.add_argument("--universe", choices=["fixed", "random"], default="fixed")
+    ap.add_argument("--seed", type=int, default=42,
+                    help="random universe sampling seed (parity with p0)")
+    ap.add_argument("--pool-size", type=int, default=300)
+    ap.add_argument("--sample-n", type=int, default=30)
     ap.add_argument("--codes", type=str, default="")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--days", type=int, default=900)
