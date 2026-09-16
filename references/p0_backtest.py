@@ -368,9 +368,10 @@ def _yf_us_ohlcv(symbol: str, days: int) -> list:
 def _fetch_stock_ohlcv(entry: dict, days: int, use_cache: bool):
     """OHLCV via the canonical degradation chain; HK skips the slow realtime
     path (measured: fetch_hk chain spent 83s on failed akshare realtime).
-    US adds a yfinance fallback; cache keys versioned (_v2) and entries
-    with <200 bars are treated as poisoned (tencent 1-bar US responses)."""
-    ckey = f"{entry['code']}_{days}_v2"
+    US adds a yfinance fallback; cache keys versioned (_v3: A-share/HK K-line
+    source promoted to Tencent) and entries with <200 bars are treated as
+    poisoned (tencent 1-bar US responses)."""
+    ckey = f"{entry['code']}_{days}_v3"
     cached = _cache_get("ohlcv", ckey, use_cache)
     if cached and cached.get("ohlcv") and len(cached["ohlcv"]) >= 200:
         ohlcv = [dict(zip(("date", "open", "close", "high", "low", "volume"), row))

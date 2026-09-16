@@ -153,7 +153,7 @@ Want to go deeper? [Scoring System](#scoring-system) explains the 100 points,
 Verify the installation (only the last command needs network):
 
 ```bash
-python3 -m pytest tests/ -q                                     # 96 passed, fully offline, ~0.3s
+python3 -m pytest tests/ -q                                     # 120 passed, fully offline, ~0.5s
 python3 references/score_config.py | head -3                     # prints the threshold registry
 python3 references/stock_data_fetcher.py --stocks "600519" --days 30 > /tmp/smoke.json
 python3 -c "import json;d=json.load(open('/tmp/smoke.json'));print(d['total_success'], d['stocks'][0]['trend_score']['signal'], d['stocks'][0]['combo']['phase'])"
@@ -272,7 +272,7 @@ Each `stocks[]` entry:
 | --- | ------- |
 | `code` / `market` / `name` | Display ticker, `cn_a` / `cn_hk` / `us`, company name |
 | `data_source` / `fetch_errors[]` / `adjustment` | Source that served the bars, per-source errors, price-adjustment mode |
-| `realtime` | Latest quote snapshot (price, change %, volume, turnover, P/E, P/B …) |
+| `realtime` | Latest quote snapshot (price, change %, volume, turnover, P/E, P/B …). Missing P/E / P/B are filled by the [valuation fallback chain](#valuation-pe-pb-fallback-chain); `valuation_source` names the source that filled them |
 | `indicators` | `ma`, `macd`, `rsi`, `volume`, `bias`, `support`, `context`, `risk`, `relative_strength`, `tradability` |
 | `indicators.context` | `phase` (`uptrend_pullback` / `downtrend_decline` / `range_swing`), `range_pos_pct`, `chg_20d_pct`, `off_high_pct`, `dist_ma60_pct` |
 | `indicators.risk` | `atr`, `atr_pct`, `ann_vol_pct`, `stop_structural`, `stop_suggested`, `target_suggested`, `rr_ratio` |
@@ -409,7 +409,7 @@ Risk gates (defaults from `score_config.RISK`, applied inside the replay when ri
 #### Tests
 
 ```bash
-python3 -m pytest tests/ -q                        # 96 passed, fully offline, ~0.3s
+python3 -m pytest tests/ -q                        # 120 passed, fully offline, ~0.5s
 python3 -m pytest tests/test_paper_trader.py -q    # one suite
 python3 -m pytest tests/ -q -k combo               # only tests matching "combo"
 ```
@@ -426,6 +426,7 @@ Per-suite breakdown: see [Testing](#testing) below.
 | `combo` is `null` | Script copied out of the repo without the sibling modules (set `SDF_REFERENCES_DIR`), or fewer than ~61 bars (warmup), or a helper import failure — details are logged on stderr |
 | `news` array empty | The free A-share source returned nothing and no Tavily/SerpAPI key is configured; the script already retried once before degrading |
 | THS `429` / `5xx` in stderr | Rate limiting — retried with backoff automatically, then the next source is used; the run is not aborted |
+| P/E or P/B shows `N/A` | Every fallback source in the [valuation chain](#valuation-pe-pb-fallback-chain) failed or returned null (loss-making company) — the attempts are logged on stderr as `<market>:<code> <source> valuation enrichment failed`. The price itself is unaffected |
 | Chinese name not resolved | Pass the numeric code, or set `HITHINK_FINANCE_API_KEY` for THS disambiguation |
 | `paper_trader` exits `1` with "no rankable signals" | The store has no signals for that window — run `p4_combo_backtest.py --save-store reports/signals.db` first |
 | Prices look stale | `.p0_cache/` never expires: rerun with `--no-cache` or delete the folder |
@@ -639,10 +640,40 @@ The script uses a **graceful degradation strategy** - works with zero configurat
 ### Quote Data Degradation Chain
 
 ```text
-A-share: Tushare Pro -> THS Official API (with key) -> efinance -> THS -> akshare -> yfinance
-HK:      efinance -> akshare -> Tencent Finance -> yfinance
-US:      Tencent Finance (primary, stable domestic connection) -> yfinance
+A-share: Tushare Pro (with token) -> Tencent Finance (stdlib, qfq) -> THS Official API (with key) -> efinance -> THS -> akshare -> yfinance
+HK:      Tencent Finance (stdlib, qfq) -> efinance -> akshare -> yfinance
+US:      Tencent Finance (stdlib, qfq/OCLH) -> yfinance
 ```
+
+Tencent leads the free chain because it is stdlib-only, needs no key, is not rate-limited,
+and its forward-adjusted (qfq) series matches the THS official series (verified 2026-09-16 on
+`002032` / `600011`: identical trading dates, closes within 0.03% / one cent of rounding).
+Tushare still outranks it when `TUSHARE_TOKEN` is set, and the key-gated THS Official API
+stays as the first *fallback* for the richer field set.
+
+The **realtime quote** chains follow the same idea (Tencent single quote first, ~0.2s, carries
+price/change%/turnover/P-E/P-B/market cap — every field downstream consumes):
+A-share: Tencent -> THS Official API -> akshare -> efinance -> THS -> yfinance;
+HK:      Tencent (P/B via the valuation chain) -> efinance -> akshare -> yfinance.
+
+### Valuation (P/E, P/B) Fallback Chain
+
+A quote source can serve a price while its valuation endpoint fails (THS `429`) or while it
+simply ships no valuation at all (Tencent HK / US). The script then fills the gaps from a
+per-market chain — **first source with a non-null value wins**, and a failing source only logs
+to stderr and degrades:
+
+```text
+A-share: Tencent single-quote (P/E + P/B, stdlib, ~0.2s) -> akshare spot -> efinance -> yfinance
+HK:      yfinance (P/E + P/B, ~2s) -> Tencent single-quote (P/E only) -> akshare spot
+US:      yfinance (P/E + P/B) -> Tencent single-quote (P/E only)
+```
+
+Tencent leads for A-share because EastMoney full-market snapshots (`stock_zh_a_spot_em`,
+`efinance`) are frequently rate-limited or blocked while a single-quote request is cheap;
+yfinance leads for HK because the Tencent HK quote carries no P/B.
+`realtime.valuation_source` records which source actually filled the fields (absent when the
+primary source already delivered them).
 
 ### News Degradation Chain
 
@@ -656,14 +687,15 @@ HK/US:   Tavily -> SerpAPI (Google News) -> Claude WebSearch
 | Market | Priority | Data Source | Python Library | Cost |
 | ------ | -------- | ----------- | -------------- | ---- |
 | A-share | P0 | Tushare Pro | tushare | Free (registration required) |
-| A-share | P1 | THS Official API | stdlib direct (requires HITHINK_FINANCE_API_KEY) | Requires THS account |
-| A-share | P2 | East Money | efinance | Free |
-| A-share | P3 | Tonghuashun | None (stdlib direct) | Free |
-| A-share | P4 | East Money | akshare | Free |
-| A-share | P5 | Yahoo Finance | yfinance | Free |
-| HK | P1 | East Money | efinance | Free |
-| HK | P2 | East Money | akshare | Free |
-| HK | P3 | Tencent Finance | None (stdlib direct) | Free |
+| A-share | P1 | Tencent Finance | None (stdlib direct) | Free |
+| A-share | P2 | THS Official API | stdlib direct (requires HITHINK_FINANCE_API_KEY) | Requires THS account |
+| A-share | P3 | East Money | efinance | Free |
+| A-share | P4 | Tonghuashun | None (stdlib direct) | Free |
+| A-share | P5 | East Money | akshare | Free |
+| A-share | P6 | Yahoo Finance | yfinance | Free |
+| HK | P1 | Tencent Finance | None (stdlib direct) | Free |
+| HK | P2 | East Money | efinance | Free |
+| HK | P3 | East Money | akshare | Free |
 | HK | P4 | Yahoo Finance | yfinance | Free |
 | US | P0 | Tencent Finance | None (stdlib direct) | Free |
 | US | P1 | Yahoo Finance | yfinance | Free |
@@ -747,7 +779,7 @@ stock-analysis/
 ## Testing
 
 ```bash
-python3 -m pytest tests/ -q      # 96 passed, fully offline (~0.3s)
+python3 -m pytest tests/ -q      # 120 passed, fully offline (~0.5s)
 ```
 
 | Suite | Cases | Covers |
@@ -761,6 +793,7 @@ python3 -m pytest tests/ -q      # 96 passed, fully offline (~0.3s)
 | `test_store.py` | 7 | SQLite roundtrip / upsert / queries |
 | `test_paper_trader.py` | 31 | replay engine + risk gates + metrics |
 | `test_risk_monitor.py` | 23 | position limits / stop-loss / circuit breaker / EOD |
+| `test_valuation_fallback.py` | 18 | P/E, P/B fallback chain (symbol mapping / chain order / failure skip / provenance) |
 
 ## Companion Documents
 

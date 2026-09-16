@@ -71,8 +71,34 @@
 
 ---
 
+## D12 ✅ 估值（P/E、P/B）兜底链与源优先级（2026-09-16）
+
+- **背景**：O-1——THS valuation snapshot 偶发 429，或价格来源本身不带估值时，卡片 P/E、P/B 显示 N/A。
+- **决策**：按市场定义回退链，**首个非空结果胜出**，单源异常只记日志不中断；真正填充时记 `realtime.valuation_source`（只填空缺，不覆盖已有值）：
+
+  | 市场 | 链序 |
+  |---|---|
+  | A 股 | tencent → akshare → efinance → yfinance |
+  | 港股 | yfinance → tencent → akshare |
+  | 美股 | yfinance → tencent |
+
+- **A 股为何腾讯优先**：腾讯单票接口 0.1–0.2s 返回动态 P/E + P/B（stdlib、无需 key）；东财系在本机不可用（`stock_zh_a_spot_em()` 连 push2 35.5s 后 ConnectionError、`efinance.get_base_info()` JSONDecodeError），且全市场快照远贵于单票接口。
+- **港股为何 yfinance 优先**：腾讯港股行情只有动态 P/E、无 P/B（实测 0700.HK），yfinance 约 2s 给全 P/E + P/B。
+- **证据**：`tests/test_valuation_fallback.py` 24 项 + 全套 120 passed；patch `_fuyao_get` 强制 valuations 429 的端到端验证（A 股 PE/PB 齐全、`valuation_source=tencent`；港股禁用东财源后 P/B 由 yfinance 补）；2026-09-16 三次连续实跑 P/E、P/B 齐全（含 HK00700 实测腾讯给 P/E 15.89、yfinance 补 P/B 2.95，`valuation_source=yfinance`）。详见 HANDOFF §15.1。
+
+---
+
+## D13 ✅ A 股数据源腾讯优先（K 线 + 实时行情，2026-09-16）
+
+- **背景**：东财系端点（akshare spot / efinance）在本机长期不可达（35s 超时 / JSONDecodeError），THS 官方 API 需 key 且偶发 429，THS 免费 last.js 出现连接重置；腾讯（qt.gtimg.cn / fqkline）0.1–0.3s 稳定、仅 stdlib、免 key、无限流。
+- **决策**：A 股 K 线链改为 Tushare(有 token) > **腾讯 fqkline** > THS 官方 API > efinance > THS > akshare > yfinance；港股 K 线链改为**腾讯 fqkline** > efinance > akshare > yfinance（原 efinance 优先在本机每次先撞 ~35s 超时）；A 股实时行情链改为**腾讯单票** > THS 官方 API > akshare > efinance > THS > yfinance；港股实时行情链改为**腾讯单票**（P/B 走估值兜底链）> efinance > akshare > yfinance。腾讯 volume 由手 ×100 换算为股与其它源对齐。
+- **口径证据**：与 THS 官方 qfq 序列交易日 120/120 对齐、历史 close 差 ≤1 分钱（双方舍入差）；`analyze_stock` 全字段扁平 diff 中信号级输出（phase / signal / combo_score）一致，vol_ratio 一致（volume 仅进比值，单位不变）。盘中 bar 的分钟级漂移属实时源固有，非源差异。港股端到端实测 **2 秒**（原 ~5 分钟）。
+- **边界**：腾讯美股 K 线仅 NASDAQ（.OQ）、usSPY 不可用（§6）→ 美股保持腾讯优先 + yfinance 兜底不变；p0 K 线缓存键 `_v2`→`_v3`，换源后 harness 整体重抓、不混用旧缓存，既有 `reports/*.json` 存档数字不变。详见 HANDOFF §15.2。**日期**：2026-09-16。
+
+---
+
 ## 优化决策（2026-09-15 评审定稿，行动清单见 HANDOFF §15）
 
-- ✅ **采纳，立即做（P1，确定性缺口）**：估值字段兜底 / 盘中 bar 标记与 vol_ratio 口径 / 实时名称回填 / 解禁替代源 / 卡片硬闸门行 / `daily_update.py` 日常自动化。
+- ✅ **采纳，立即做（P1，确定性缺口）**：估值字段兜底（O-1 已于 2026-09-16 完成 ✅）/ 盘中 bar 标记与 vol_ratio 口径 / 实时名称回填 / 解禁替代源 / 卡片硬闸门行 / `daily_update.py` 日常自动化。
 - ⚠️ **有条件采纳（P2，走 D9 流程）**：mom_confirm 换裸 20 日动量或 OBV / 组件级概率校准驱动仓位 / downtrend 死分支放宽（研究）或删除（简化）/ 新闻事件分类与公司专属过滤 / 按 phase 差异化持有期。
 - ❌ **默认拒绝**：为提高 coverage / PF / 曲线美观而调参（D4/D5 先例）；用总分做概率或跨 phase 比较（P1-7 证伪）。

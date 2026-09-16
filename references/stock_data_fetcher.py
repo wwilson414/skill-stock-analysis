@@ -8,8 +8,8 @@ Adjustment standard: All data sources in the degradation chain use forward-adjus
 If any source fails, immediately throw error and switch to next source; never silently degrade to non-adjusted data.
 
 Data source priority (graceful degradation):
-  A-share: Tushare Pro (if TUSHARE_TOKEN set) > THS Official API(if HITHINK_FINANCE_API_KEY set) > efinance > THS > akshare > yfinance
-  HK:      efinance > akshare > Tencent Finance > yfinance
+  A-share: Tushare Pro (if TUSHARE_TOKEN set) > Tencent Finance (free, stdlib, qfq) > THS Official API(if HITHINK_FINANCE_API_KEY set) > efinance > THS > akshare > yfinance
+  HK:      Tencent Finance (free, stdlib, qfq) > efinance > akshare > yfinance
   US:      Tencent Finance > yfinance
 
 News search priority (via --news flag):
@@ -554,12 +554,150 @@ def _fetch_realtime_fuyao(code: str) -> dict:
         vit = ((vresp.get("data") or {}).get("item") or [{}])[0]
         if vit:
             rt["name"] = vit.get("name") or rt["name"]
-            rt["pe_ttm"] = _safe_float(vit.get("pe_ttm"))
+            rt["pe_ratio"] = _safe_float(vit.get("pe_ttm"))
+            rt["pe_ttm"] = rt["pe_ratio"]  # backward-compat alias (template uses pe_ratio)
             rt["pb_ratio"] = _safe_float(vit.get("pb_mrq"))
             rt["ps_ttm"] = _safe_float(vit.get("ps_ttm"))
             rt["pcf_ttm"] = _safe_float(vit.get("pcf_ttm"))
     except Exception:
         pass
+    return rt
+
+
+def _qq_a_symbol(code: str) -> str:
+    """A-share pure code -> Tencent realtime quote symbol (600519 -> sh600519, 920xxx -> bj920xxx).
+
+    Reuses `_fuyao_thscode` so exchange classification stays in one place.
+    """
+    return f"{_fuyao_thscode(code).rsplit('.', 1)[-1].lower()}{code}"
+
+
+def _valuation_tencent(market: str, code: str) -> dict:
+    """P/E (+ P/B for A-share) from the single-code Tencent quote (qt.gtimg.cn).
+
+    Cheapest fallback: one small stdlib-only request, no key, domestic
+    connection. A-share quotes carry both dynamic P/E and P/B; HK/US quotes
+    only populate dynamic P/E, so their P/B comes back None.
+    """
+    if market == "cn_a":
+        symbol = _qq_a_symbol(code)
+    elif market == "cn_hk":
+        symbol = f"hk{code}"
+    else:
+        symbol = f"us{code}"
+    rt = _fetch_realtime_qt(symbol)
+    return {"pe_ratio": rt.get("pe_ratio"), "pb_ratio": rt.get("pb_ratio")}
+
+
+def _valuation_akshare(market: str, code: str) -> dict:
+    """P/E + P/B from akshare full-market spot (EastMoney, can be rate-limited)."""
+    import akshare as ak
+    if market == "cn_a":
+        spot = ak.stock_zh_a_spot_em()
+        row = spot[spot["code"] == code]
+        if row.empty:
+            return {}
+        r = row.iloc[0]
+        return {"pe_ratio": _safe_float(r.get("P/E ratio - dynamic")),
+                "pb_ratio": _safe_float(r.get("P/B ratio"))}
+    spot = ak.stock_hk_spot_em()
+    row = spot[spot["code"] == str(code)]
+    if row.empty:
+        return {}
+    r = row.iloc[0]
+    return {"pe_ratio": _safe_float(r.get("P/E ratio")),
+            "pb_ratio": _safe_float(r.get("P/B ratio"))}
+
+
+def _valuation_efinance(market: str, code: str) -> dict:
+    """P/E + P/B from efinance base info (A-share only; EastMoney push2)."""
+    if market != "cn_a":
+        return {}
+    import efinance as ef
+    s = ef.stock.get_base_info(code)
+    if s is None:
+        return {}
+    return {"pe_ratio": _safe_float(s.get("市盈率(动)")),
+            "pb_ratio": _safe_float(s.get("市净率"))}
+
+
+def _valuation_yfinance(market: str, code: str) -> dict:
+    """P/E + P/B from yfinance `.info` (works when EastMoney endpoints are blocked)."""
+    import yfinance as yf
+    info = yf.Ticker(to_yfinance_code(code, market)).info
+    if not info:
+        return {}
+    return {"pe_ratio": _safe_float(info.get("trailingPE")),
+            "pb_ratio": _safe_float(info.get("priceToBook"))}
+
+
+# Fallback order per market: cheapest / most reliable source first. EastMoney
+# endpoints (akshare spot, efinance push2) are blocked or heavily rate-limited
+# on some networks, so the single-code Tencent quote leads for A-share.
+_VALUATION_CHAIN = {
+    "cn_a": ("tencent", "akshare", "efinance", "yfinance"),
+    "cn_hk": ("yfinance", "tencent", "akshare"),
+    "us": ("yfinance", "tencent"),
+}
+
+
+def _fetch_valuation_spot(market: str, code: str) -> dict:
+    """Fetch P/E and P/B from fallback sources for a quote missing valuation fields.
+
+    O-1: when the primary valuation source fails (e.g. THS Official API
+    valuation endpoint returned HTTP 429 while its price snapshot succeeded)
+    or the price came from a source that ships no pe/pb, P/E and P/B must
+    still reach the dashboard. Sources are tried in `_VALUATION_CHAIN` order
+    for the market; the first one returning at least one non-null value wins.
+
+    Returns {"pe_ratio": float|None, "pb_ratio": float|None, "source": str}
+    or {} (never raises).
+    """
+    fetch = {"tencent": _valuation_tencent, "akshare": _valuation_akshare,
+             "efinance": _valuation_efinance, "yfinance": _valuation_yfinance}
+    for name in _VALUATION_CHAIN.get(market, ()):
+        try:
+            val = fetch[name](market, code)
+        except Exception as e:
+            _log(f"[{market}:{code}] {name} valuation enrichment failed: "
+                 f"{type(e).__name__}: {str(e)[:120]}")
+            continue
+        if val and (val.get("pe_ratio") is not None or val.get("pb_ratio") is not None):
+            val["source"] = name
+            return val
+    return {}
+
+
+def _enrich_valuation(rt: dict, market: str, code: str) -> dict:
+    """Fill missing pe_ratio / pb_ratio in *rt* from a free fallback source.
+
+    Called when a realtime quote has a price but lacks valuation fields
+    (e.g. THS Official API valuation 429, or a source that doesn't ship
+    pe/pb). Non-fatal: a failure here simply leaves the fields missing
+    rather than propagating an error. When something is actually filled,
+    `valuation_source` records which fallback served it.
+    """
+    if not rt or not rt.get("price"):
+        return rt
+    if rt.get("pe_ratio") is None and rt.get("pe_ttm") is not None:
+        rt["pe_ratio"] = rt["pe_ttm"]  # legacy alias -> template field (P/E Ratio)
+    needs_pe = rt.get("pe_ratio") is None
+    needs_pb = rt.get("pb_ratio") is None
+    if not needs_pe and not needs_pb:
+        return rt
+    val = _fetch_valuation_spot(market, code)
+    if not val:
+        return rt
+    filled = False
+    if needs_pe and val.get("pe_ratio") is not None:
+        rt["pe_ratio"] = val["pe_ratio"]
+        rt["pe_ttm"] = val["pe_ratio"]  # backward-compat alias
+        filled = True
+    if needs_pb and val.get("pb_ratio") is not None:
+        rt["pb_ratio"] = val["pb_ratio"]
+        filled = True
+    if filled and val.get("source"):
+        rt["valuation_source"] = val["source"]
     return rt
 
 
@@ -730,6 +868,28 @@ def _qq_us_symbol(code: str) -> str:
     raise last_err or ValueError(f"tencent: cannot resolve US symbol for {code}")
 
 
+def _fetch_qq_a(code: str, days: int):
+    """Fetch A-share daily K-line via Tencent fqkline (qfq, stdlib only).
+
+    Verified against the THS official series (2026-09-16, 002032 / 600011):
+    identical trading dates; historical closes differ by at most 0.03% (one
+    cent of rounding — both are forward-adjusted calibers). Volume comes back
+    in lots (手), so it is x100-converted to shares to match the THS/akshare/
+    efinance rows; all consumers use ratios (vol_ratio / OBV), which are
+    unit-invariant either way. `amount` stays None (Tencent fqkline does not
+    provide turnover; nothing downstream consumes bar-level amount).
+    """
+    symbol = _qq_a_symbol(code)
+    ohlcv = _qq_kline(symbol, days + 10)[-days:]
+    if not ohlcv:
+        raise ValueError(f"tencent returned no data for {symbol}")
+    for bar in ohlcv:
+        if bar.get("volume") is not None:
+            bar["volume"] = round(bar["volume"] * 100, 4)  # lots -> shares
+    _log(f"[{code}] Using tencent/qq (free, qfq)")
+    return _qq_add_pct_chg(ohlcv), "tencent"
+
+
 def _fetch_qq_hk(code: str, days: int):
     """Fetch HK stock via Tencent fqkline."""
     ohlcv = _qq_kline(f"hk{code}", days + 10)[-days:]
@@ -747,6 +907,19 @@ def _fetch_qq_us(code: str, days: int):
         raise ValueError(f"tencent returned no data for {symbol}")
     _log(f"[{code}] Using tencent/qq (free, symbol={symbol})")
     return _qq_add_pct_chg(ohlcv), "tencent"
+
+
+def _clean_qq_name(name: str) -> str:
+    """Normalize a Tencent quote name.
+
+    gtimg pads CJK names to a fixed display width with spaces ("苏 泊 尔" for
+    苏泊尔), which would leak into the dashboard and into name-based logic.
+    Spaces only appear as padding for CJK names, so strip them there and leave
+    Latin names (where spaces are meaningful) untouched.
+    """
+    if name and _has_cjk(name):
+        return "".join(name.split())
+    return name
 
 
 def _parse_qt_quote(body: str) -> dict:
@@ -775,7 +948,7 @@ def _parse_qt_quote(body: str) -> dict:
         return v * 1e8 if v is not None else None
 
     return {
-        "name": g(1),
+        "name": _clean_qq_name(g(1)),
         "price": price,
         "pre_close": _safe_float(g(4)),
         "open": _safe_float(g(5)),
@@ -804,15 +977,23 @@ def _fetch_realtime_qt(symbol: str) -> dict:
 
 def _fetch_realtime_a(code: str) -> dict:
     """Fetch A-share realtime quote with fallback."""
-    # Try THS Official API first (fastest, official fields + valuation; needs key)
+    # Priority 1: Tencent single quote (free, stdlib-only, ~0.2s; carries name/price/
+    # change%/turnover/P-E/P-B/market cap, i.e. every field downstream consumes)
+    try:
+        rt = _fetch_realtime_qt(_qq_a_symbol(code))
+        if rt.get("price"):
+            return _enrich_valuation(rt, "cn_a", code)
+    except Exception:
+        pass
+    # Priority 2: THS Official API (official fields + valuation; needs key, may 429)
     if _ths_api_key():
         try:
             rt = _fetch_realtime_fuyao(code)
             if rt.get("price"):
-                return rt
+                return _enrich_valuation(rt, "cn_a", code)
         except Exception:
             pass
-    # Try akshare spot (most reliable for realtime)
+    # Priority 3: akshare spot (EastMoney full-market snapshot)
     if _check_source("akshare"):
         try:
             import akshare as ak
@@ -820,7 +1001,7 @@ def _fetch_realtime_a(code: str) -> dict:
             row = spot_df[spot_df["code"] == code]
             if not row.empty:
                 r = row.iloc[0]
-                return {
+                rt = {
                     "name": str(r.get("name", code)),
                     "price": _safe_float(r.get("latest price")),
                     "change_pct": _safe_float(r.get("change percent")),
@@ -839,36 +1020,38 @@ def _fetch_realtime_a(code: str) -> dict:
                     "pre_close": _safe_float(r.get("previous close")),
                     "volume_ratio": _safe_float(r.get("volume ratio")),
                 }
+                return _enrich_valuation(rt, "cn_a", code)
         except Exception:
             pass
-    # Try efinance
+    # Priority 4: efinance
     if _check_source("efinance"):
         try:
             import efinance as ef
             qt = ef.stock.get_realtime_quotes([code])
             if qt is not None and not qt.empty:
                 r = qt.iloc[0]
-                return {
+                rt = {
                     "name": str(r.get("stock name", code)),
                     "price": _safe_float(r.get("latest price")),
                     "change_pct": _safe_float(r.get("change percent")),
                 }
+                return _enrich_valuation(rt, "cn_a", code)
         except Exception:
             pass
-    # Try THS (free, stdlib-only; works when EastMoney endpoints are blocked)
+    # Priority 5: THS free endpoint (stdlib-only; works when EastMoney endpoints are blocked)
     try:
         rt = _fetch_realtime_ths(code)
         if rt.get("price"):
-            return rt
+            return _enrich_valuation(rt, "cn_a", code)
     except Exception:
         pass
-    # yfinance fallback (works even when akshare/efinance endpoints are blocked)
+    # Priority 6: yfinance (works even when akshare/efinance endpoints are blocked)
     if _check_source("yfinance"):
         try:
             import yfinance as yf
             info = yf.Ticker(to_yfinance_code(code, "cn_a")).info
             if info:
-                return {
+                rt = {
                     "name": info.get("shortName") or info.get("longName") or code,
                     "price": _safe_float(info.get("currentPrice") or info.get("regularMarketPrice")),
                     "change_pct": _safe_float(info.get("regularMarketChangePercent")),
@@ -882,6 +1065,7 @@ def _fetch_realtime_a(code: str) -> dict:
                     "week_52_high": _safe_float(info.get("fiftyTwoWeekHigh")),
                     "week_52_low": _safe_float(info.get("fiftyTwoWeekLow")),
                 }
+                return _enrich_valuation(rt, "cn_a", code)
         except Exception:
             pass
     return {}
@@ -890,12 +1074,21 @@ def _fetch_realtime_a(code: str) -> dict:
 def _fetch_realtime_hk(code: str) -> dict:
     """Fetch HK realtime quote.
 
-    Degradation chain consistent with fetch_hk historical quotes: efinance → akshare → yfinance.
-    efinance.get_latest_quote fetches snapshot by single ticker (includes name/change percent/high low/PE/market cap),
-    more stable than akshare HK full market snapshot (stock_hk_spot_em, fetches all tickers at once and easily rate-limited),
-    so ranked first. Each source failure writes log (no longer silently pass and return null dict).
+    Degradation chain mirrors the promoted K-line chain: tencent → efinance → akshare → yfinance.
+    Tencent single quote leads (stdlib-only, ~0.2s, name/price/change%/P-E; P/B filled by the
+    valuation fallback chain), so the ~35s EastMoney connection timeouts observed on
+    rate-limited networks are no longer on the common path. Each source failure writes log
+    (no longer silently pass and return null dict).
     """
-    # Priority 1: efinance (single-code snapshot, rich fields)
+    # Priority 1: Tencent single quote (free, stdlib-only, stable domestic connection)
+    try:
+        rt = _fetch_realtime_qt(f"hk{code}")
+        if rt.get("price"):
+            return _enrich_valuation(rt, "cn_hk", code)
+    except Exception as e:
+        _log(f"[HK{code}] tencent real-time snapshot failed: {e}")
+
+    # Priority 2: efinance (single-code snapshot, rich fields)
     if _check_source("efinance"):
         try:
             import efinance as ef
@@ -921,11 +1114,11 @@ def _fetch_realtime_hk(code: str) -> dict:
                     "realtime_source": "efinance",
                 }
                 if rt["price"]:
-                    return rt
+                    return _enrich_valuation(rt, "cn_hk", code)
         except Exception as e:
             _log(f"[HK{code}] efinance real-time snapshot failed: {e}")
 
-    # Priority 2: akshare East Money HK full market snapshot
+    # Priority 2: akshare East Money HK full market snapshot (only source with HK P/B)
     if _check_source("akshare"):
         try:
             import akshare as ak
@@ -933,7 +1126,7 @@ def _fetch_realtime_hk(code: str) -> dict:
             matched = spot_df[spot_df["code"] == code]
             if not matched.empty:
                 r = matched.iloc[0]
-                return {
+                rt = {
                     "name": str(r.get("name", f"HK{code}")),
                     "price": _safe_float(r.get("latest price")),
                     "change_pct": _safe_float(r.get("change percent")),
@@ -943,18 +1136,11 @@ def _fetch_realtime_hk(code: str) -> dict:
                     "total_mv": _safe_float(r.get("total market cap")),
                     "realtime_source": "akshare",
                 }
+                return _enrich_valuation(rt, "cn_hk", code)
         except Exception as e:
             _log(f"[HK{code}] akshare real-time snapshot failed: {e}")
 
-    # Priority 2.5: Tencent real-time quotes (free, stdlib-only, stable domestic connection)
-    try:
-        rt = _fetch_realtime_qt(f"hk{code}")
-        if rt.get("price"):
-            return rt
-    except Exception as e:
-        _log(f"[HK{code}] tencent real-time snapshot failed: {e}")
-
-    # Priority 3: yfinance (works when EastMoney endpoints are blocked)
+    # Priority 4: yfinance (works when EastMoney endpoints are blocked)
     if _check_source("yfinance"):
         try:
             import yfinance as yf
@@ -1015,7 +1201,7 @@ def _fetch_realtime_us(code: str) -> dict:
     try:
         rt = _fetch_realtime_qt(f"us{code}")
         if rt.get("price"):
-            return rt
+            return _enrich_valuation(rt, "us", code)
     except Exception as e:
         _log(f"[{code}] tencent real-time snapshot failed: {e}")
     return {}
@@ -1036,47 +1222,55 @@ _SOURCE_ADJUSTMENT = "qfq (forward-adjusted)"
 
 
 def fetch_cn_a(code: str, days: int) -> dict:
-    """Fetch A-share with priority: Tushare > THS Official API (with key) > efinance > THS > akshare > yfinance."""
+    """Fetch A-share: Tushare Pro (if token set) > Tencent (stdlib, stable) > THS Official API > efinance > THS > akshare > yfinance."""
     ohlcv = None
     source = "unknown"
     errors = []
 
-    # Priority 0: Tushare Pro (if token configured)
+    # Priority 0: Tushare Pro (explicitly token-configured, so it outranks the free chain)
     if os.environ.get("TUSHARE_TOKEN") and _check_source("tushare"):
         try:
             ohlcv, source = _fetch_tushare_a(code, days)
         except Exception as e:
             errors.append(f"tushare: {e}")
 
-    # Priority 1: THS Official API (requires HITHINK_FINANCE_API_KEY, forward-adjusted + structured fields)
+    # Priority 1: Tencent fqkline (free, stdlib-only, qfq caliber verified against THS;
+    # ~0.2s vs several seconds for the key-gated THS API and no rate limiting)
+    if ohlcv is None:
+        try:
+            ohlcv, source = _fetch_qq_a(code, days)
+        except Exception as e:
+            errors.append(f"tencent: {e}")
+
+    # Priority 2: THS Official API (requires HITHINK_FINANCE_API_KEY, forward-adjusted + structured fields)
     if ohlcv is None and _ths_api_key():
         try:
             ohlcv, source = _fetch_fuyao_a(code, days)
         except Exception as e:
             errors.append(f"ths_api: {e}")
 
-    # Priority 2: efinance
+    # Priority 3: efinance
     if ohlcv is None and _check_source("efinance"):
         try:
             ohlcv, source = _fetch_efinance_a(code, days)
         except Exception as e:
             errors.append(f"efinance: {e}")
 
-    # Priority 3: THS (free, no pip dependency)
+    # Priority 4: THS (free, no pip dependency)
     if ohlcv is None:
         try:
             ohlcv, source = _fetch_ths_a(code, days)
         except Exception as e:
             errors.append(f"ths: {e}")
 
-    # Priority 4: akshare
+    # Priority 5: akshare
     if ohlcv is None and _check_source("akshare"):
         try:
             ohlcv, source = _fetch_akshare_a(code, days)
         except Exception as e:
             errors.append(f"akshare: {e}")
 
-    # Priority 5: yfinance (universal fallback)
+    # Priority 6: yfinance (universal fallback)
     if ohlcv is None and _check_source("yfinance"):
         try:
             ohlcv, source = _fetch_yfinance(code, "cn_a", days)
@@ -1093,30 +1287,33 @@ def fetch_cn_a(code: str, days: int) -> dict:
 
 
 def fetch_hk(code: str, days: int) -> dict:
-    """Fetch HK stock with priority: efinance > akshare > yfinance."""
+    """Fetch HK stock: Tencent (stdlib, stable) > efinance > akshare > yfinance."""
     ohlcv = None
     source = "unknown"
     errors = []
 
-    if _check_source("efinance"):
+    # Priority 1: Tencent fqkline (free, stdlib-only, qfq; no dependency on the
+    # frequently unreachable EastMoney push2his host)
+    try:
+        ohlcv, source = _fetch_qq_hk(code, days)
+    except Exception as e:
+        errors.append(f"tencent: {e}")
+
+    # Priority 2: efinance (single-code snapshot, richer fields)
+    if ohlcv is None and _check_source("efinance"):
         try:
             ohlcv, source = _fetch_efinance_hk(code, days)
         except Exception as e:
             errors.append(f"efinance: {e}")
 
+    # Priority 3: akshare
     if ohlcv is None and _check_source("akshare"):
         try:
             ohlcv, source = _fetch_akshare_hk(code, days)
         except Exception as e:
             errors.append(f"akshare: {e}")
 
-    # Priority 2.5: Tencent (free, stdlib-only, stable domestic connection)
-    if ohlcv is None:
-        try:
-            ohlcv, source = _fetch_qq_hk(code, days)
-        except Exception as e:
-            errors.append(f"tencent: {e}")
-
+    # Priority 4: yfinance (universal fallback)
     if ohlcv is None and _check_source("yfinance"):
         try:
             ohlcv, source = _fetch_yfinance(code, "cn_hk", days)

@@ -78,9 +78,26 @@ The script supports **graceful degradation strategy**, works with zero configura
 | `SERPAPI_KEY` | HK/US stock news search (backup) | Register at [serpapi.com](https://serpapi.com) | 100 calls/month |
 
 **Quote data degradation chain**:
-- A-share: Tushare Pro -> THS Official API (with key) -> efinance -> THS -> akshare -> yfinance
-- HK: efinance -> akshare -> Tencent Finance -> yfinance
-- US: Tencent Finance (primary, stable domestic connection) -> yfinance
+- A-share: Tushare Pro (with token) -> Tencent Finance (stdlib, qfq) -> THS Official API (with key) -> efinance -> THS -> akshare -> yfinance
+- HK: Tencent Finance (stdlib, qfq) -> efinance -> akshare -> yfinance
+- US: Tencent Finance (stdlib) -> yfinance
+
+Tencent leads the free chain (stdlib, no key, not rate-limited; its qfq series matches the THS
+official series within one cent of rounding — verified 2026-09-16 on `002032` / `600011`).
+The **realtime quote** chains mirror this: A-share Tencent single quote -> THS Official API ->
+akshare -> efinance -> THS -> yfinance; HK Tencent single quote (P/B via the valuation chain)
+-> efinance -> akshare -> yfinance.
+
+**Valuation (P/E, P/B) fallback chain** (used only when the quote source ships no valuation or
+its valuation endpoint fails, e.g. THS 429; first non-null value wins, failures only degrade and
+are logged on stderr):
+- A-share: Tencent single-quote (P/E + P/B) -> akshare spot -> efinance -> yfinance
+- HK: yfinance (P/E + P/B) -> Tencent single-quote (P/E only) -> akshare spot
+- US: yfinance (P/E + P/B) -> Tencent single-quote (P/E only)
+
+`realtime.valuation_source` names the source that filled the fields; it is absent when the primary
+source already delivered them. A card may only render `N/A` for P/E / P/B when every chain source
+failed or returned null (e.g. a loss-making company).
 
 **News degradation chain**: Tavily -> SerpAPI -> WebSearch (agent-provided fallback)
 
@@ -330,7 +347,7 @@ the repo root so modules resolve (or set `SDF_REFERENCES_DIR=<repo>/references`)
 | Combo vs single-signal backtest (+ persist) | `python3 references/p4_combo_backtest.py --save-store reports/signals.db` |
 | Paper-trading replay (T+1, fees, risk gates, perf gate) | `python3 references/paper_trader.py --db reports/signals.db --start 2025-09-01` |
 | Store smoke test (scratch DB) | `python3 references/store.py --demo` |
-| Unit tests (offline) | `python3 -m pytest tests/ -q` (96 passed) |
+| Unit tests (offline) | `python3 -m pytest tests/ -q` (120 passed) |
 
 Evidence: P4-1b net-of-fee rotation portfolio — combo +12.8%/yr Sharpe 0.059 vs comp_vol
 +9.6%/0.046. Out-of-sample gate 2025-09 → 2026-08 (`reports/p4_paper_trader_oos.json`):

@@ -14,7 +14,7 @@
 - 优化方向与优先级见 §15；模拟盘日常运行见 §13；
 - 决策与拒绝项记录：`DECISIONS.md`（NEXT_STEPS.md 已并入本文档 §14 后删除）
 - 研究档案（原 ROADMAP.md，2026-09-15 并入）：§16
-> **测试基线**：`python3 -m pytest tests/ -q` → **96 passed**
+> **测试基线**：`python3 -m pytest tests/ -q` → **120 passed**
 
 ---
 
@@ -143,8 +143,9 @@ tests/
 ├── test_analyze_combo.py   # P4-2 analyze_stock combo 接入 4 项
 ├── test_store.py           # P4-3 SQLite 持久层 7 项
 ├── test_paper_trader.py    # P4-4 模拟盘引擎 31 项（20 执行 + 11 风控/指标）
-└── test_risk_monitor.py    # P4-5 风控监控 23 项
-（合计 96 项：`python3 -m pytest tests/ -q` 全绿，~0.3s）
+├── test_risk_monitor.py    # P4-5 风控监控 23 项
+└── test_valuation_fallback.py  # O-1 估值兜底链 + 腾讯优先（tencent/akshare/efinance/yfinance）24 项
+（合计 120 项：`python3 -m pytest tests/ -q` 全绿，~0.5s）
 ```
 
 ---
@@ -192,6 +193,7 @@ python3 -m pytest tests/ -q
 - 腾讯美股 K 线仅覆盖 NASDAQ（.OQ），NYSE 代码（JPM/JNJ/KO/XOM）仅返回 1 根 → yfinance 兜底
 - tencent usSPY 不可用 → 基准用 SPY@yfinance
 - eastmoney push2 主域偶发 502 → 已加重试 + push2delay 镜像回退
+- 东财系端点在本机（2026-09-16 实测）基本不可用：`stock_zh_a_spot_em()` 连 `82.push2.eastmoney.com` 35.5s 后 ConnectionError、`efinance.get_base_info()` JSONDecodeError、港股 `stock_hk_spot_em()` 需先撞 ~35s 连接超时；THS 免费 last.js 亦出现 `Remote end closed connection without response`。腾讯（qt.gtimg.cn / fqkline）0.1–0.3s 稳定返回 → **A 股 K 线与实时行情已改为腾讯优先**（见 §15.2、DECISIONS D13）
 - 缓存 `.p0_cache/` 已 gitignore，冷启动 <2 分钟
 - THS fuyao API 偶发 HTTP 429（短窗口限流，苏泊尔实测复现）→ `_fuyao_get` 已加 429/5xx 退避重试（≤3 次、尊重 Retry-After、上限 6s）+ 网络错误补 1 次；中文名检索最终失败时回退 akshare 免费代码表（精确匹配，多命中不猜测）
 - akshare `stock_news_em` 实际返回**中文列名**（新闻标题/新闻内容/…），脚本旧代码按英文列名取值 → 恒为空串（2026-09-14 苏泊尔实测定位）；已改列名别名兼容 + 空载荷行过滤 + `search_news` 内空结果重试 1 次再降级
@@ -399,7 +401,7 @@ cd /home/wwei/workspace/skill-stock-analysis
 cat HANDOFF.md DECISIONS.md
 
 # 3. 验证环境
-python3 -m pytest tests/ -q          # 96 passed
+python3 -m pytest tests/ -q          # 120 passed
 python3 references/p0_backtest.py    # P0 全量（缓存 <2 min）
 
 # 4. P4 收官（4/4 指标达成），无遗留。复跑样本外验收：
@@ -475,7 +477,7 @@ python3 references/paper_trader.py --db reports/signals.db \
 
 | # | 优化 | 依据（实跑发现） | 验收 |
 |---|---|---|---|
-| O-1 | 估值字段兜底：P/E、P/B 落 efinance/akshare | 苏泊尔实跑 THS valuation 429 → 卡片 P/E、P/B N/A | 连续两次实跑字段齐全 |
+| O-1 ✅ | 估值字段兜底：P/E、P/B 多源回退链（tencent/akshare/efinance/yfinance） | 苏泊尔实跑 THS valuation 429 → 卡片 P/E、P/B N/A | ✅ 连续两次实跑字段齐全（2026-09-16，见 §15.1） |
 | O-2 | 盘中 bar 标记 + vol_ratio 口径修正 | 华能国际 14:24 运行 vol_ratio 0.60、苏泊尔 0.16 均为半日 bar 失真 | JSON 增 `bar_partial`；卡片标注 |
 | O-3 | realtime.name 回填 display name | 苏泊尔 `realtime.name='002032'` 而非"苏泊尔" | 各来源输出统一中文名 |
 | O-4 | 解禁数据替代源 | 两次实跑均 `no upcoming unlock data` → 闸门空转 | 有数据，或显式输出"闸门未启用" |
@@ -509,6 +511,71 @@ python3 references/paper_trader.py --db reports/signals.db \
 - 为提高 coverage / PF / 曲线美观而调参——默认拒绝，除非有新的独立证据
 - 用总分做概率或跨 phase 比较——P1-7 已证伪
 - 离散事件版均值回归——仅 27 次触发、均值 -2.17%（D9 反例）
+
+### O-1 修复记录：估值兜底链（2026-09-16）✅
+
+**问题**：THS valuation snapshot 偶发 429（或价格来源本身不带估值）→ 卡片 P/E、P/B N/A。
+
+**改动（`references/stock_data_fetcher.py`）**：
+
+- 新增 `_qq_a_symbol()`：A 股纯代码 → 腾讯行情符号（复用 `_fuyao_thscode` 的交易所判定：600519→sh600519 / 002032→sz002032 / 920008→bj920008）。
+- **根因之一**：`_fetch_realtime_fuyao()` 的估值快照原本只写 `pe_ttm`，而模板/卡片读 `pe_ratio` → 即便 THS 正常返回，P/E 也恒为 N/A。现同时写 `pe_ratio`（保留 `pe_ttm` 别名），且 `_enrich_valuation()` 会把只带 `pe_ttm` 的行情镜像到 `pe_ratio`。
+- 新增 4 个单源取数函数 `_valuation_tencent` / `_valuation_akshare` / `_valuation_efinance` / `_valuation_yfinance`，统一返回 `{pe_ratio, pb_ratio}`。
+- `_fetch_valuation_spot()` 改为按市场走回退链 `_VALUATION_CHAIN`，**首个非空结果胜出**，单源异常只记日志不中断：
+
+  | 市场 | 链序 |
+  |---|---|
+  | A 股 | tencent → akshare → efinance → yfinance |
+  | 港股 | yfinance → tencent → akshare |
+  | 美股 | yfinance → tencent |
+
+- `_enrich_valuation()` 只填空缺、不覆盖已有值；真正填充时补记 `realtime.valuation_source`（哪个源供数）。
+- 补齐调用点：A 股 akshare / yfinance 分支、港股 akshare / Tencent 分支、美股 Tencent 分支此前**直接 return 不做兜底**，现统一过 `_enrich_valuation()`。
+
+**为什么 A 股把腾讯放第一位**（本机实测 2026-09-16）：
+
+- 腾讯单票接口 0.1–0.2s 返回价格 + 动态 P/E + P/B（苏泊尔 15.58 / 6.25；华能国际 9.19 / 1.67），仅 stdlib、无需 key。
+- 东财系端点在本机不可用：`akshare.stock_zh_a_spot_em()` 连 `82.push2.eastmoney.com` 35.5s 后 ConnectionError；`efinance.stock.get_base_info()` JSONDecodeError；THS valuation 曾 429。全市场快照接口也比单票接口贵得多。
+- 港股腾讯行情只有动态 P/E、无 P/B → 港股链首位给 yfinance（实测 `0700.HK` trailingPE 14.62 / priceToBook 2.95，约 2s）。
+
+**验收证据**：
+
+- 单测 24 项（`tests/test_valuation_fallback.py`）：符号映射、链序（含"后续源不得被调用"）、腾讯 A 股/港股 K 线与实时行情优先级（含回退路径）、单源抛错跳过、全空返回 `{}`、`valuation_source` 语义、`pe_ttm`→`pe_ratio` 镜像、港股腾讯 P/E 保留 + yfinance 补 P/B；全套 **120 passed**（原 105 项无回归）。
+- 端到端强制 THS valuation 429（patch `_fuyao_get` 对 valuations 路径抛错）：`002032` PE 15.58 / PB 6.25、`600011` PE 9.19 / PB 1.67，均 `valuation_source=tencent`；港股禁用东财源后 PE 15.89 / PB 2.95，`valuation_source=yfinance`。
+- **实跑（2026-09-16，三次连续，`--stocks 002032,600011,HK00700 --days 120`）**：
+
+  | 运行 | 时间 | 002032 | 600011 | HK00700 |
+  |---|---|---|---|---|
+  | 1 | 12:25 | P/E 15.58 / P/B 6.25 | P/E 9.19 / P/B 1.67 | （未纳入） |
+  | 2 | 12:28 | P/E 15.58 / P/B 6.25 | P/E 9.19 / P/B 1.67 | （未纳入） |
+  | 3 | 12:36 | P/E 15.58 / P/B 6.25 | P/E 9.19 / P/B 1.67 | P/E 15.89(tencent) / P/B 2.95(`valuation_source=yfinance`) |
+
+  A 股两票 P/E、P/B 齐全（`valuation_source` 为空 = 主源 THS 已供全，兜底链未触发，符合"只填空缺"）；港股为**兜底链真实生效**的活证据（腾讯给 P/E、yfinance 补 P/B）。三次 `total_success=3`，无异常。
+
+**顺带发现 → 已由腾讯优先缓解（2026-09-16 同日）**：港股实时快照原链 efinance → akshare（东财全市场，本机不可达，每次 ~35s 连接超时）→ 腾讯（Priority 2.5）。腾讯提为 Priority 1 后，35s 超时退出常见路径——实测 HK00700 全链分析从 ~5 分钟降至 **2 秒**（exit=0）；akshare 仅剩腾讯也失败时才会触达（O-17 可再加快速熔断缓存）。
+
+### 15.2 Tencent 优先为 A 股数据源（2026-09-16）✅
+
+**变更（`references/stock_data_fetcher.py`）**：
+
+- A 股 **K 线**链：Tushare（有 token 时）> **腾讯 fqkline（新 Priority 1，`_fetch_qq_a`，qfq）** > THS 官方 API > efinance > THS > akshare > yfinance。理由：腾讯仅 stdlib、免 key、无限流、0.1–0.3s；THS 官方 API 需 key 且偶发 429，东财系在本机不可达（§6）。
+- **港股 K 线**链同步腾讯优先（原 Priority 1 是 efinance——本机不可达，每次港股都要先撞 ~35s 连接超时才降级）：腾讯 > efinance > akshare > yfinance。
+- **港股实时行情**链同步腾讯优先（原 Priority 2.5）：腾讯（P/E 直供，P/B 走估值兜底链）> efinance > akshare > yfinance。
+- A 股 **实时行情**链同理改为腾讯单票优先（~0.2s，含 name/price/涨跌幅/换手/P-E/P-B/市值，下游消费字段全覆盖），THS 官方 API 降为首兜底。
+- `_fetch_qq_a` 将腾讯的**手 ×100 换算为股**，与 THS/akshare/efinance 行一致；`amount` 保持 None（腾讯 fqkline 无成交额；下游无 bar 级 amount 消费——p0 建池排序用的是东财 clist 自带 f6，与 K 线无关）。
+
+**口径一致性验证（2026-09-16，两两同进程比对 `analyze_stock` 全字段扁平 diff）**：
+
+| 项 | 结果 |
+|---|---|
+| 交易日对齐 | 120/120 完全一致（002032 / 600011） |
+| 历史 close 差异 | ≤0.03%（1 分钱级，双方 qfq 舍入差） |
+| 信号级输出 | 600011：phase / atr_pct / dist_ma60 / combo_score(-0.0566 vs -0.0549) / signal(strong_buy) 全一致；002032：signal 一致 |
+| vol_ratio | 一致（volume 仅进比值，手/股单位不变性成立） |
+| 盘中 bar 差异 | 两次抓取相隔 ~1 分钟产生的 intraday 漂移（如 close 39.66 vs 39.68 → support_ma5 翻转 ±5 分），**非源差异**，任何实时源固有 |
+| 港股端到端耗时 | HK00700 全链分析 **2 秒**（exit=0；K 线/行情/基准均腾讯直供，P/E 15.88 + P/B 2.9461 由 yfinance 兜底），换链前同票 ~5 分钟 |
+
+**研究复现性说明**：`p0_backtest` 的 K 线缓存键已随换源从 `_v2` 升到 `_v3` —— harness 重跑时会**整体重抓**（A 股 + 港股统一腾讯口径），不会出现 THS 旧缓存与腾讯新 bar 混用；既有 `reports/*.json` 研究数字存档不受影响。历史序列两源差 ≤1 分钱，信号级输出已验证一致（见上表）。
 
 ---
 
