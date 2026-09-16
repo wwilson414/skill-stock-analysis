@@ -347,7 +347,7 @@ the repo root so modules resolve (or set `SDF_REFERENCES_DIR=<repo>/references`)
 | Combo vs single-signal backtest (+ persist) | `python3 references/p4_combo_backtest.py --save-store reports/signals.db` |
 | Paper-trading replay (T+1, fees, risk gates, perf gate) | `python3 references/paper_trader.py --db reports/signals.db --start 2025-09-01` |
 | Store smoke test (scratch DB) | `python3 references/store.py --demo` |
-| Unit tests (offline) | `python3 -m pytest tests/ -q` (142 passed) |
+| Unit tests (offline) | `python3 -m pytest tests/ -q` (158 passed) |
 
 Evidence: P4-1b net-of-fee rotation portfolio — combo +12.8%/yr Sharpe 0.059 vs comp_vol
 +9.6%/0.046. Out-of-sample gate 2025-09 → 2026-08 (`reports/p4_paper_trader_oos.json`):

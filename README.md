@@ -153,7 +153,7 @@ Want to go deeper? [Scoring System](#scoring-system) explains the 100 points,
 Verify the installation (only the last command needs network):
 
 ```bash
-python3 -m pytest tests/ -q                                     # 142 passed, fully offline, ~0.5s
+python3 -m pytest tests/ -q                                     # 158 passed, fully offline, ~0.5s
 python3 references/score_config.py | head -3                     # prints the threshold registry
 python3 references/stock_data_fetcher.py --stocks "600519" --days 30 > /tmp/smoke.json
 python3 -c "import json;d=json.load(open('/tmp/smoke.json'));print(d['total_success'], d['stocks'][0]['trend_score']['signal'], d['stocks'][0]['combo']['phase'])"
@@ -410,7 +410,7 @@ Risk gates (defaults from `score_config.RISK`, applied inside the replay when ri
 #### Tests
 
 ```bash
-python3 -m pytest tests/ -q                        # 142 passed, fully offline, ~0.5s
+python3 -m pytest tests/ -q                        # 158 passed, fully offline, ~0.5s
 python3 -m pytest tests/test_paper_trader.py -q    # one suite
 python3 -m pytest tests/ -q -k combo               # only tests matching "combo"
 ```
@@ -428,6 +428,7 @@ Per-suite breakdown: see [Testing](#testing) below.
 | `news` array empty | The free A-share source returned nothing and no Tavily/SerpAPI key is configured; the script already retried once before degrading |
 | THS `429` / `5xx` in stderr | Rate limiting — retried with backoff automatically, then the next source is used; the run is not aborted |
 | P/E or P/B shows `N/A` | Every fallback source in the [valuation chain](#valuation-pe-pb-fallback-chain) failed or returned null (loss-making company) — the attempts are logged on stderr as `<market>:<code> <source> valuation enrichment failed`. The price itself is unaffected |
+| `name` shows the bare code | All name sources degraded: the THS ticker search (key-gated) and the akshare code-name table (cached once per run, then circuit-broken — the table endpoint can hang ~35s on networks where EastMoney is unreachable) both failed; the analysis is otherwise complete |
 | Chinese name not resolved | Pass the numeric code, or set `HITHINK_FINANCE_API_KEY` for THS disambiguation |
 | `paper_trader` exits `1` with "no rankable signals" | The store has no signals for that window — run `p4_combo_backtest.py --save-store reports/signals.db` first |
 | Prices look stale | `.p0_cache/` never expires: rerun with `--no-cache` or delete the folder |
@@ -780,7 +781,7 @@ stock-analysis/
 ## Testing
 
 ```bash
-python3 -m pytest tests/ -q      # 142 passed, fully offline (~0.5s)
+python3 -m pytest tests/ -q      # 158 passed, fully offline (~0.5s)
 ```
 
 | Suite | Cases | Covers |
@@ -796,6 +797,7 @@ python3 -m pytest tests/ -q      # 142 passed, fully offline (~0.5s)
 | `test_risk_monitor.py` | 23 | position limits / stop-loss / circuit breaker / EOD |
 | `test_valuation_fallback.py` | 24 | P/E, P/B fallback chain + tencent-first priorities (symbol mapping / chain order / failure skip / provenance) |
 | `test_bar_partial.py` | 22 | intraday partial-bar flag + session pro-rated vol_ratio (exchange-tz sessions / wiring / backtest-path invariance) |
+| `test_name_unify.py` | 16 | realtime.name unification (CJK whitespace cleanup / degraded-name backfill chain / wiring) |
 
 ## Companion Documents
 

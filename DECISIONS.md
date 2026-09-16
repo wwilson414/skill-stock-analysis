@@ -84,7 +84,7 @@
 
 - **A 股为何腾讯优先**：腾讯单票接口 0.1–0.2s 返回动态 P/E + P/B（stdlib、无需 key）；东财系在本机不可用（`stock_zh_a_spot_em()` 连 push2 35.5s 后 ConnectionError、`efinance.get_base_info()` JSONDecodeError），且全市场快照远贵于单票接口。
 - **港股为何 yfinance 优先**：腾讯港股行情只有动态 P/E、无 P/B（实测 0700.HK），yfinance 约 2s 给全 P/E + P/B。
-- **证据**：`tests/test_valuation_fallback.py` 24 项 + `tests/test_bar_partial.py` 22 项 + 全套 142 passed；patch `_fuyao_get` 强制 valuations 429 的端到端验证（A 股 PE/PB 齐全、`valuation_source=tencent`；港股禁用东财源后 P/B 由 yfinance 补）；2026-09-16 三次连续实跑 P/E、P/B 齐全（含 HK00700 实测腾讯给 P/E 15.89、yfinance 补 P/B 2.95，`valuation_source=yfinance`）。详见 HANDOFF §15.1。
+- **证据**：`tests/test_valuation_fallback.py` 24 项 + `tests/test_bar_partial.py` 22 项 + 全套 158 passed；patch `_fuyao_get` 强制 valuations 429 的端到端验证（A 股 PE/PB 齐全、`valuation_source=tencent`；港股禁用东财源后 P/B 由 yfinance 补）；2026-09-16 三次连续实跑 P/E、P/B 齐全（含 HK00700 实测腾讯给 P/E 15.89、yfinance 补 P/B 2.95，`valuation_source=yfinance`）。详见 HANDOFF §15.1。
 
 ---
 

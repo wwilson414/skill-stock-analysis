@@ -2633,6 +2633,84 @@ def _ensure_reference_modules() -> bool:
     return False
 
 
+_CODE_NAME_TABLE = {"loaded": False, "by_code": None}
+
+
+def _resolve_code_name_akshare(code: str):
+    """Reverse of `_resolve_cn_name_akshare`: A-share code -> Chinese name.
+
+    O-3 backfill source of last resort (after the THS ticker search): the free
+    akshare code-name table, fetched once per process and cached. A failed
+    fetch poisons the cache for the whole run on purpose — the table endpoint
+    can hang ~35s on networks where EastMoney is unreachable, and retrying it
+    per stock would multiply that; a degraded (code-like) name is cosmetically
+    wrong but not fatal. Best-effort: returns None on any failure, never raises.
+    """
+    if not _check_source("akshare"):
+        return None
+    if not _CODE_NAME_TABLE["loaded"]:
+        try:
+            import akshare as ak
+            df = ak.stock_info_a_code_name()
+            table = {}
+            if df is not None and not df.empty:
+                for _, r in df.iterrows():
+                    nm = str(r.get("name", "")).strip()
+                    cd = str(r.get("code", "")).strip()
+                    if nm and cd:
+                        table[cd] = nm
+            _CODE_NAME_TABLE["by_code"] = table or None
+        except Exception as e:
+            _log(f"[{code}] akshare code-name table unavailable: "
+                 f"{type(e).__name__}: {str(e)[:120]}")
+            _CODE_NAME_TABLE["by_code"] = None
+        _CODE_NAME_TABLE["loaded"] = True
+    return (_CODE_NAME_TABLE["by_code"] or {}).get(str(code or "").strip())
+
+
+def _clean_cjk_name(name):
+    """Collapse whitespace inside CJK display names (qt.gtimg sometimes emits '苏 泊 尔')."""
+    if not name:
+        return name
+    n = str(name).strip()
+    if any("\u4e00" <= ch <= "\u9fff" for ch in n):
+        n = "".join(n.split())
+    return n
+
+
+def _unified_realtime_name(name, code, display, market):
+    """O-3: unify record/realtime names to the resolved Chinese display name.
+
+    Real names pass through (Chinese or English — only whitespace inside CJK is
+    collapsed). A missing or code-like name ('002032', e.g. the THS price
+    snapshot carries no name and its valuation supplement 429'd) is treated as
+    degraded and backfilled: THS ticker search (fast, key-gated) -> akshare
+    code-name table (free, cached, best-effort) -> display/code as-is.
+    """
+    n = _clean_cjk_name(name)
+    code_s = str(code or "").strip()
+    disp_s = str(display or "").strip()
+    if n and n not in (code_s, disp_s) and n.upper() != code_s.upper():
+        return n
+    if market == "cn_a":
+        if _ths_api_key():
+            try:
+                exact = [h for h in _search_fuyao(code_s) or []
+                         if str(h.get("thscode", "")).rsplit(".", 1)[0] == code_s
+                         or str(h.get("ticker", "")) == code_s]
+                if exact and exact[0].get("name"):
+                    cleaned = _clean_cjk_name(exact[0]["name"])
+                    if cleaned:
+                        return cleaned
+            except Exception as e:
+                _log(f"[{code_s}] THS name backfill failed: "
+                     f"{type(e).__name__}: {str(e)[:120]}")
+        resolved = _resolve_code_name_akshare(code_s)
+        if resolved:
+            return _clean_cjk_name(resolved)
+    return n or disp_s or code_s
+
+
 def analyze_stock(code: str, days: int = 120, fetch_news: bool = False) -> dict:
     """Full analysis pipeline for a single stock."""
     market, normalized, display = classify_stock(code)
@@ -2673,6 +2751,16 @@ def analyze_stock(code: str, days: int = 120, fetch_news: bool = False) -> dict:
         raw = fetch_hk(normalized, days)
     else:
         raw = fetch_us(normalized, days)
+
+    # O-3: unify record + realtime names to the resolved Chinese display name
+    # (the THS price snapshot carries no name, so a failed valuation supplement
+    # used to leave realtime.name as the bare code)
+    unified_name = _unified_realtime_name(
+        (raw.get("realtime") or {}).get("name") or raw.get("name"),
+        normalized, display, market)
+    raw["name"] = unified_name
+    if raw.get("realtime"):
+        raw["realtime"]["name"] = unified_name
 
     ohlcv = raw["ohlcv"]
     if not ohlcv or len(ohlcv) < 10:

@@ -14,7 +14,7 @@
 - 优化方向与优先级见 §15；模拟盘日常运行见 §13；
 - 决策与拒绝项记录：`DECISIONS.md`（NEXT_STEPS.md 已并入本文档 §14 后删除）
 - 研究档案（原 ROADMAP.md，2026-09-15 并入）：§16
-> **测试基线**：`python3 -m pytest tests/ -q` → **142 passed**
+> **测试基线**：`python3 -m pytest tests/ -q` → **158 passed**
 
 ---
 
@@ -145,8 +145,9 @@ tests/
 ├── test_paper_trader.py    # P4-4 模拟盘引擎 31 项（20 执行 + 11 风控/指标）
 ├── test_risk_monitor.py    # P4-5 风控监控 23 项
 ├── test_valuation_fallback.py  # O-1 估值兜底链 + 腾讯优先（tencent/akshare/efinance/yfinance）24 项
-└── test_bar_partial.py     # O-2 盘中 bar 标记 + vol_ratio 折算 22 项
-（合计 142 项：`python3 -m pytest tests/ -q` 全绿，~0.5s）
+├── test_bar_partial.py     # O-2 盘中 bar 标记 + vol_ratio 折算 22 项
+└── test_name_unify.py      # O-3 realtime.name 统一中文名（CJK 清洗 + 回填链）16 项
+（合计 158 项：`python3 -m pytest tests/ -q` 全绿，~0.5s）
 ```
 
 ---
@@ -402,7 +403,7 @@ cd /home/wwei/workspace/skill-stock-analysis
 cat HANDOFF.md DECISIONS.md
 
 # 3. 验证环境
-python3 -m pytest tests/ -q          # 142 passed
+python3 -m pytest tests/ -q          # 158 passed
 python3 references/p0_backtest.py    # P0 全量（缓存 <2 min）
 
 # 4. P4 收官（4/4 指标达成），无遗留。复跑样本外验收：
@@ -480,7 +481,7 @@ python3 references/paper_trader.py --db reports/signals.db \
 |---|---|---|---|
 | O-1 ✅ | 估值字段兜底：P/E、P/B 多源回退链（tencent/akshare/efinance/yfinance） | 苏泊尔实跑 THS valuation 429 → 卡片 P/E、P/B N/A | ✅ 连续两次实跑字段齐全（2026-09-16，见 §15.1） |
 | O-2 ✅ | 盘中 bar 标记 + vol_ratio 口径修正 | 华能国际 14:24 运行 vol_ratio 0.60、苏泊尔 0.16 均为半日 bar 失真 | ✅ JSON 增 `bar_partial`；卡片标注（2026-09-16，见 §15.3） |
-| O-3 | realtime.name 回填 display name | 苏泊尔 `realtime.name='002032'` 而非"苏泊尔" | 各来源输出统一中文名 |
+| O-3 ✅ | realtime.name 回填 display name | 苏泊尔 `realtime.name='002032'` 而非"苏泊尔" | ✅ 各来源输出统一中文名（2026-09-16，见 §15.4） |
 | O-4 | 解禁数据替代源 | 两次实跑均 `no upcoming unlock data` → 闸门空转 | 有数据，或显式输出"闸门未启用" |
 | O-5 | 卡片展示硬闸门行 `Hard Gates: fired(...)/none` | 闸门只在 JSON `buy_gates`；Strong Buy 与 combo 负分并存时易误读 | 模板更新 + 单测 |
 | O-6 | `daily_update.py` + cron 模板（§13 流程一键化） | 日常流程需手敲多条命令 | 一条命令完成灌库；周末自动回放 |
@@ -541,7 +542,7 @@ python3 references/paper_trader.py --db reports/signals.db \
 
 **验收证据**：
 
-- 单测 24 项（`tests/test_valuation_fallback.py`）：符号映射、链序（含"后续源不得被调用"）、腾讯 A 股/港股 K 线与实时行情优先级（含回退路径）、单源抛错跳过、全空返回 `{}`、`valuation_source` 语义、`pe_ttm`→`pe_ratio` 镜像、港股腾讯 P/E 保留 + yfinance 补 P/B；全套 **142 passed**（原 105 项无回归）。
+- 单测 24 项（`tests/test_valuation_fallback.py`）：符号映射、链序（含"后续源不得被调用"）、腾讯 A 股/港股 K 线与实时行情优先级（含回退路径）、单源抛错跳过、全空返回 `{}`、`valuation_source` 语义、`pe_ttm`→`pe_ratio` 镜像、港股腾讯 P/E 保留 + yfinance 补 P/B；全套 **158 passed**（原 105 项无回归）。
 - 端到端强制 THS valuation 429（patch `_fuyao_get` 对 valuations 路径抛错）：`002032` PE 15.58 / PB 6.25、`600011` PE 9.19 / PB 1.67，均 `valuation_source=tencent`；港股禁用东财源后 PE 15.89 / PB 2.95，`valuation_source=yfinance`。
 - **实跑（2026-09-16，三次连续，`--stocks 002032,600011,HK00700 --days 120`）**：
 
@@ -590,6 +591,19 @@ python3 references/paper_trader.py --db reports/signals.db \
 - 仅 `analyze_stock` 实盘路径接线；卡片模板（`output-format-template.md`）Volume 行增 `{bar_partial_note}`，附"盘中未收盘，量比已按已交易 X% 时长折算"标注规范。
 
 **边界（记录为 O-7/O-8 研究输入）**：live combo 的 comp_vol 组件（`mr_signal`）仍用未折算的当日量，盘中 combo_score 可能同样偏低——属信号语义变更，须走 D9 流程，不在 O-2 范围内。
+
+### 15.4 O-3 修复记录：realtime.name 统一中文名（2026-09-16）✅
+
+**根因**：THS 官方 API 的**价格快照不含名称**（`_fetch_realtime_fuyao` 先写 `"name": code`），名称只在估值补充快照成功时回填——估值 429（即 O-1 场景）时 `realtime.name` 退化为 `'002032'`，且记录级 `name`（取自 realtime）一并退化。另外 qt.gtimg 偶发输出带空格的 CJK 名（`'苏 泊 尔'`）。
+
+**改动（`references/stock_data_fetcher.py`）**：
+
+- `_clean_cjk_name()`：CJK 名内空白折叠（`'苏 泊 尔'`→`'苏泊尔'`），非 CJK 名（"Apple Inc"）不动。
+- `_unified_realtime_name(name, code, display, market)`：真实名称直通；缺失或 code-like（== code/display，忽略大小写）视为退化并回填——**THS ticker 搜索（有 key，快）→ akshare 免费代码表 → display 原样**，全程 best-effort 不抛错。
+- `_resolve_code_name_akshare(code)`：`_resolve_cn_name_akshare` 的反向查表（code→名），**进程级缓存 + 失败熔断**——东财系不可达时该表会挂 ~35s，熔断保证退化场景最多慢一次、不按股票数放大（名字退化仅外观问题，不影响信号）。
+- `analyze_stock` 接线：fetch 后统一 `raw["name"]` 与 `raw["realtime"]["name"]`；news 搜索用 `raw["name"]`，同步受益（搜"苏泊尔"而非"002032"）；`calc_tradability` 的 ST 判定因拿到真实名称更准。
+
+**验收**：单测 16 项（`tests/test_name_unify.py`：CJK 清洗 / 真名直通 / 港美股不回填 / THS 搜索命中与 miss→akshare 链 / 异常存活 / analyze 接线三态）；全套 **158 passed**。实跑（002032/600011/HK00700/AAPL）`realtime.name` 全部为中文名且记录名一致。
 
 ---
 
