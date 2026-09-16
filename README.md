@@ -153,7 +153,7 @@ Want to go deeper? [Scoring System](#scoring-system) explains the 100 points,
 Verify the installation (only the last command needs network):
 
 ```bash
-python3 -m pytest tests/ -q                                     # 120 passed, fully offline, ~0.5s
+python3 -m pytest tests/ -q                                     # 142 passed, fully offline, ~0.5s
 python3 references/score_config.py | head -3                     # prints the threshold registry
 python3 references/stock_data_fetcher.py --stocks "600519" --days 30 > /tmp/smoke.json
 python3 -c "import json;d=json.load(open('/tmp/smoke.json'));print(d['total_success'], d['stocks'][0]['trend_score']['signal'], d['stocks'][0]['combo']['phase'])"
@@ -275,6 +275,7 @@ Each `stocks[]` entry:
 | `realtime` | Latest quote snapshot (price, change %, volume, turnover, P/E, P/B …). Missing P/E / P/B are filled by the [valuation fallback chain](#valuation-pe-pb-fallback-chain); `valuation_source` names the source that filled them |
 | `indicators` | `ma`, `macd`, `rsi`, `volume`, `bias`, `support`, `context`, `risk`, `relative_strength`, `tradability` |
 | `indicators.context` | `phase` (`uptrend_pullback` / `downtrend_decline` / `range_swing`), `range_pos_pct`, `chg_20d_pct`, `off_high_pct`, `dist_ma60_pct` |
+| `indicators.volume` | `vol_ratio`, `trend`, `bar_partial` — when the newest bar is still forming (intraday), `vol_ratio` is **pro-rated to a full-day equivalent** and `vol_ratio_raw` / `session_elapsed_pct` carry the unadjusted value and elapsed-session percent for the card annotation |
 | `indicators.risk` | `atr`, `atr_pct`, `ann_vol_pct`, `stop_structural`, `stop_suggested`, `target_suggested`, `rr_ratio` |
 | `indicators.relative_strength` | `benchmark`, `stock_ret_20d` / `stock_ret_60d`, `bench_ret_20d` / `bench_ret_60d`, `rs_20d`, `rs_60d` |
 | `indicators.tradability` | `limit_status`, `limit_threshold_pct`, `change_pct` |
@@ -409,7 +410,7 @@ Risk gates (defaults from `score_config.RISK`, applied inside the replay when ri
 #### Tests
 
 ```bash
-python3 -m pytest tests/ -q                        # 120 passed, fully offline, ~0.5s
+python3 -m pytest tests/ -q                        # 142 passed, fully offline, ~0.5s
 python3 -m pytest tests/test_paper_trader.py -q    # one suite
 python3 -m pytest tests/ -q -k combo               # only tests matching "combo"
 ```
@@ -779,7 +780,7 @@ stock-analysis/
 ## Testing
 
 ```bash
-python3 -m pytest tests/ -q      # 120 passed, fully offline (~0.5s)
+python3 -m pytest tests/ -q      # 142 passed, fully offline (~0.5s)
 ```
 
 | Suite | Cases | Covers |
@@ -793,7 +794,8 @@ python3 -m pytest tests/ -q      # 120 passed, fully offline (~0.5s)
 | `test_store.py` | 7 | SQLite roundtrip / upsert / queries |
 | `test_paper_trader.py` | 31 | replay engine + risk gates + metrics |
 | `test_risk_monitor.py` | 23 | position limits / stop-loss / circuit breaker / EOD |
-| `test_valuation_fallback.py` | 18 | P/E, P/B fallback chain (symbol mapping / chain order / failure skip / provenance) |
+| `test_valuation_fallback.py` | 24 | P/E, P/B fallback chain + tencent-first priorities (symbol mapping / chain order / failure skip / provenance) |
+| `test_bar_partial.py` | 22 | intraday partial-bar flag + session pro-rated vol_ratio (exchange-tz sessions / wiring / backtest-path invariance) |
 
 ## Companion Documents
 

@@ -84,7 +84,15 @@
 
 - **A 股为何腾讯优先**：腾讯单票接口 0.1–0.2s 返回动态 P/E + P/B（stdlib、无需 key）；东财系在本机不可用（`stock_zh_a_spot_em()` 连 push2 35.5s 后 ConnectionError、`efinance.get_base_info()` JSONDecodeError），且全市场快照远贵于单票接口。
 - **港股为何 yfinance 优先**：腾讯港股行情只有动态 P/E、无 P/B（实测 0700.HK），yfinance 约 2s 给全 P/E + P/B。
-- **证据**：`tests/test_valuation_fallback.py` 24 项 + 全套 120 passed；patch `_fuyao_get` 强制 valuations 429 的端到端验证（A 股 PE/PB 齐全、`valuation_source=tencent`；港股禁用东财源后 P/B 由 yfinance 补）；2026-09-16 三次连续实跑 P/E、P/B 齐全（含 HK00700 实测腾讯给 P/E 15.89、yfinance 补 P/B 2.95，`valuation_source=yfinance`）。详见 HANDOFF §15.1。
+- **证据**：`tests/test_valuation_fallback.py` 24 项 + `tests/test_bar_partial.py` 22 项 + 全套 142 passed；patch `_fuyao_get` 强制 valuations 429 的端到端验证（A 股 PE/PB 齐全、`valuation_source=tencent`；港股禁用东财源后 P/B 由 yfinance 补）；2026-09-16 三次连续实跑 P/E、P/B 齐全（含 HK00700 实测腾讯给 P/E 15.89、yfinance 补 P/B 2.95，`valuation_source=yfinance`）。详见 HANDOFF §15.1。
+
+---
+
+## D14 ✅ vol_ratio 盘中口径：全日等价折算 + `bar_partial` 标注（2026-09-16）
+
+- **背景**：O-2——盘中运行时当日 bar 未走完，`vol_ratio = 当日部分量 / 前 5 日全日均值` 被系统性低估（华能国际 14:24 → 0.60、苏泊尔上午 → 0.16），卡片无提示。
+- **决策**：`analyze_stock` 实盘路径按交易所时区计算已交易时段占比（A股 240min / 港股 330min / 美股 390min，zoneinfo 处理夏令时），当日量先折算成全日等价量再算 vol_ratio；JSON 输出 `bar_partial` / `session_elapsed_pct` / `vol_ratio_raw`，卡片 Volume 行加折算标注。**回测路径不变**（`compute_signal_from_ohlcv` 不传 frac，历史信号语义与研究数字零变化）。
+- **证据**：实跑 14:37（盘中）三市场标记正确——A股 elapsed 90.4%、港股 74.8%（各自时段公式吻合）；raw→adjusted 0.53→0.59 / 0.81→0.90 / 0.49→0.65；单测 22 项含"回测路径不变性"。详见 HANDOFF §15.3。**日期**：2026-09-16。
 
 ---
 
@@ -99,6 +107,6 @@
 
 ## 优化决策（2026-09-15 评审定稿，行动清单见 HANDOFF §15）
 
-- ✅ **采纳，立即做（P1，确定性缺口）**：估值字段兜底（O-1 已于 2026-09-16 完成 ✅）/ 盘中 bar 标记与 vol_ratio 口径 / 实时名称回填 / 解禁替代源 / 卡片硬闸门行 / `daily_update.py` 日常自动化。
+- ✅ **采纳，立即做（P1，确定性缺口）**：估值字段兜底（O-1 已于 2026-09-16 完成 ✅）/ 盘中 bar 标记与 vol_ratio 口径（O-2 已于 2026-09-16 完成 ✅，见 D14）/ 实时名称回填 / 解禁替代源 / 卡片硬闸门行 / `daily_update.py` 日常自动化。
 - ⚠️ **有条件采纳（P2，走 D9 流程）**：mom_confirm 换裸 20 日动量或 OBV / 组件级概率校准驱动仓位 / downtrend 死分支放宽（研究）或删除（简化）/ 新闻事件分类与公司专属过滤 / 按 phase 差异化持有期。
 - ❌ **默认拒绝**：为提高 coverage / PF / 曲线美观而调参（D4/D5 先例）；用总分做概率或跨 phase 比较（P1-7 证伪）。

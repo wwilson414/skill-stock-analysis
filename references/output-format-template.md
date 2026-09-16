@@ -41,7 +41,7 @@ For each stock, output one card separated by `---`:
 - MA: MA5={ma5} MA10={ma10} MA20={ma20} | {alignment_en}
 - MACD: DIF={dif} DEA={dea} Histogram={hist} | {macd_signal_en}
 - RSI: RSI6={rsi6} RSI12={rsi12} RSI24={rsi24} | {rsi_zone_en}
-- Volume: Volume Ratio {vol_ratio} | {vol_trend_en}
+- Volume: Volume Ratio {vol_ratio} | {vol_trend_en}{bar_partial_note}
 - Bias: MA5 Bias {bias_ma5:+.2f}%
 
 **AI Judgment**
@@ -118,6 +118,14 @@ Sentiment: {sentiment_label_en} (score {sentiment_score}, time-decay weighted) |
 | shrink_pullback | Volume-Contraction Pullback |
 | shrink_up | Low-Volume Rally |
 | normal | Normal |
+
+### Intraday Partial Bar Note (`bar_partial_note`)
+
+When `indicators.volume.bar_partial` is `true`, the newest OHLCV bar is still forming:
+the volume ratio has been **pro-rated to a full-day equivalent** using the elapsed session
+fraction (`session_elapsed_pct`). Append to the Volume line, e.g.
+`（盘中未收盘，量比已按已交易 74.2% 时长折算；早盘折算噪声较大）`.
+When `bar_partial` is `false`, leave `bar_partial_note` empty.
 
 ### RSI Zone English Mapping
 

@@ -14,7 +14,7 @@
 - 优化方向与优先级见 §15；模拟盘日常运行见 §13；
 - 决策与拒绝项记录：`DECISIONS.md`（NEXT_STEPS.md 已并入本文档 §14 后删除）
 - 研究档案（原 ROADMAP.md，2026-09-15 并入）：§16
-> **测试基线**：`python3 -m pytest tests/ -q` → **120 passed**
+> **测试基线**：`python3 -m pytest tests/ -q` → **142 passed**
 
 ---
 
@@ -144,8 +144,9 @@ tests/
 ├── test_store.py           # P4-3 SQLite 持久层 7 项
 ├── test_paper_trader.py    # P4-4 模拟盘引擎 31 项（20 执行 + 11 风控/指标）
 ├── test_risk_monitor.py    # P4-5 风控监控 23 项
-└── test_valuation_fallback.py  # O-1 估值兜底链 + 腾讯优先（tencent/akshare/efinance/yfinance）24 项
-（合计 120 项：`python3 -m pytest tests/ -q` 全绿，~0.5s）
+├── test_valuation_fallback.py  # O-1 估值兜底链 + 腾讯优先（tencent/akshare/efinance/yfinance）24 项
+└── test_bar_partial.py     # O-2 盘中 bar 标记 + vol_ratio 折算 22 项
+（合计 142 项：`python3 -m pytest tests/ -q` 全绿，~0.5s）
 ```
 
 ---
@@ -401,7 +402,7 @@ cd /home/wwei/workspace/skill-stock-analysis
 cat HANDOFF.md DECISIONS.md
 
 # 3. 验证环境
-python3 -m pytest tests/ -q          # 120 passed
+python3 -m pytest tests/ -q          # 142 passed
 python3 references/p0_backtest.py    # P0 全量（缓存 <2 min）
 
 # 4. P4 收官（4/4 指标达成），无遗留。复跑样本外验收：
@@ -478,7 +479,7 @@ python3 references/paper_trader.py --db reports/signals.db \
 | # | 优化 | 依据（实跑发现） | 验收 |
 |---|---|---|---|
 | O-1 ✅ | 估值字段兜底：P/E、P/B 多源回退链（tencent/akshare/efinance/yfinance） | 苏泊尔实跑 THS valuation 429 → 卡片 P/E、P/B N/A | ✅ 连续两次实跑字段齐全（2026-09-16，见 §15.1） |
-| O-2 | 盘中 bar 标记 + vol_ratio 口径修正 | 华能国际 14:24 运行 vol_ratio 0.60、苏泊尔 0.16 均为半日 bar 失真 | JSON 增 `bar_partial`；卡片标注 |
+| O-2 ✅ | 盘中 bar 标记 + vol_ratio 口径修正 | 华能国际 14:24 运行 vol_ratio 0.60、苏泊尔 0.16 均为半日 bar 失真 | ✅ JSON 增 `bar_partial`；卡片标注（2026-09-16，见 §15.3） |
 | O-3 | realtime.name 回填 display name | 苏泊尔 `realtime.name='002032'` 而非"苏泊尔" | 各来源输出统一中文名 |
 | O-4 | 解禁数据替代源 | 两次实跑均 `no upcoming unlock data` → 闸门空转 | 有数据，或显式输出"闸门未启用" |
 | O-5 | 卡片展示硬闸门行 `Hard Gates: fired(...)/none` | 闸门只在 JSON `buy_gates`；Strong Buy 与 combo 负分并存时易误读 | 模板更新 + 单测 |
@@ -540,7 +541,7 @@ python3 references/paper_trader.py --db reports/signals.db \
 
 **验收证据**：
 
-- 单测 24 项（`tests/test_valuation_fallback.py`）：符号映射、链序（含"后续源不得被调用"）、腾讯 A 股/港股 K 线与实时行情优先级（含回退路径）、单源抛错跳过、全空返回 `{}`、`valuation_source` 语义、`pe_ttm`→`pe_ratio` 镜像、港股腾讯 P/E 保留 + yfinance 补 P/B；全套 **120 passed**（原 105 项无回归）。
+- 单测 24 项（`tests/test_valuation_fallback.py`）：符号映射、链序（含"后续源不得被调用"）、腾讯 A 股/港股 K 线与实时行情优先级（含回退路径）、单源抛错跳过、全空返回 `{}`、`valuation_source` 语义、`pe_ttm`→`pe_ratio` 镜像、港股腾讯 P/E 保留 + yfinance 补 P/B；全套 **142 passed**（原 105 项无回归）。
 - 端到端强制 THS valuation 429（patch `_fuyao_get` 对 valuations 路径抛错）：`002032` PE 15.58 / PB 6.25、`600011` PE 9.19 / PB 1.67，均 `valuation_source=tencent`；港股禁用东财源后 PE 15.89 / PB 2.95，`valuation_source=yfinance`。
 - **实跑（2026-09-16，三次连续，`--stocks 002032,600011,HK00700 --days 120`）**：
 
@@ -576,6 +577,19 @@ python3 references/paper_trader.py --db reports/signals.db \
 | 港股端到端耗时 | HK00700 全链分析 **2 秒**（exit=0；K 线/行情/基准均腾讯直供，P/E 15.88 + P/B 2.9461 由 yfinance 兜底），换链前同票 ~5 分钟 |
 
 **研究复现性说明**：`p0_backtest` 的 K 线缓存键已随换源从 `_v2` 升到 `_v3` —— harness 重跑时会**整体重抓**（A 股 + 港股统一腾讯口径），不会出现 THS 旧缓存与腾讯新 bar 混用；既有 `reports/*.json` 研究数字存档不受影响。历史序列两源差 ≤1 分钱，信号级输出已验证一致（见上表）。
+
+### 15.3 O-2 修复记录：盘中 bar 标记 + vol_ratio 折算（2026-09-16）✅
+
+**问题**：盘中运行时当日 bar 未走完，`vol_ratio = 当日部分成交量 / 前 5 日全日均值` 被系统性低估（华能国际 14:24 → 0.60、苏泊尔上午 → 0.16），且卡片无任何提示。
+
+**改动（`references/stock_data_fetcher.py`）**：
+
+- 新增 `_session_elapsed_frac(market, now=None)`：按交易所时区（zoneinfo，自动处理美股冬令时）计算常规交易时段已进行比例——A股 09:30-11:30/13:00-15:00（240min）、港股 09:30-12:00/13:00-16:00（330min）、美股 09:30-16:00 ET（390min）；收盘后/未知市场返回 1.0；下限 clamp 0.05（开盘头几分钟折算噪声大）。
+- 新增 `_last_bar_partial(market, last_bar_date, now=None)`：最后一根 bar 的日期 == 交易所当天 且时段未收 → `(True, frac)`；历史 bar 或已收盘 → `(False, 1.0)`。节假日自然回落（当天无 bar）。
+- `calc_volume_analysis(..., session_elapsed_frac=None)`：传入 frac < 1 时，先把当日量折算成全日等价量再算 vol_ratio，并输出 `bar_partial: true` / `session_elapsed_pct` / `vol_ratio_raw`（未折算原值）；**默认（不传参）输出键值与历史完全一致**（`bar_partial: false` + 原数学），回测路径 `compute_signal_from_ohlcv` 保持原调用不动 → 研究语义零变化。
+- 仅 `analyze_stock` 实盘路径接线；卡片模板（`output-format-template.md`）Volume 行增 `{bar_partial_note}`，附"盘中未收盘，量比已按已交易 X% 时长折算"标注规范。
+
+**边界（记录为 O-7/O-8 研究输入）**：live combo 的 comp_vol 组件（`mr_signal`）仍用未折算的当日量，盘中 combo_score 可能同样偏低——属信号语义变更，须走 D9 流程，不在 O-2 范围内。
 
 ---
 

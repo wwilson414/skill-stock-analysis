@@ -2157,10 +2157,90 @@ def fetch_upcoming_unlocks(code: str, within_days: int = 60) -> list:
     return []
 
 
-def calc_volume_analysis(volumes: list, closes: list) -> dict:
-    """Analyze volume patterns. Tolerates None volumes (aligned with valid_bars)."""
+def _session_elapsed_frac(market: str, now: "datetime | None" = None) -> float:
+    """Fraction of the regular session elapsed for *market* right now (exchange tz).
+
+    Returns a value in (0, 1]: 1.0 when the market is closed (before open counts
+    as nothing traded but no partial bar exists then either), weekends/holidays
+    fall out naturally because no same-day bar is produced. Uses zoneinfo so US
+    DST is handled; unknown markets return 1.0 (never pro-rate blindly).
+    """
+    try:
+        from zoneinfo import ZoneInfo
+    except Exception:  # pragma: no cover - zoneinfo is stdlib since 3.9
+        return 1.0
+    tz = {"cn_a": "Asia/Shanghai", "cn_hk": "Asia/Hong_Kong",
+          "us": "America/New_York"}.get(market)
+    if not tz:
+        return 1.0
+    sessions = {"cn_a": (((9, 30), (11, 30)), ((13, 0), (15, 0))),
+                "cn_hk": (((9, 30), (12, 0)), ((13, 0), (16, 0))),
+                "us": (((9, 30), (16, 0)),)}[market]
+    now = now or datetime.now(ZoneInfo(tz))
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=ZoneInfo(tz))
+    local = now.astimezone(ZoneInfo(tz))
+    minutes = local.hour * 60 + local.minute
+    total = 0
+    elapsed = 0
+    for (oh, om), (ch, cm) in sessions:
+        start, end = oh * 60 + om, ch * 60 + cm
+        total += end - start
+        if minutes >= end:
+            elapsed += end - start
+        elif minutes > start:
+            elapsed += minutes - start
+    if total <= 0:
+        return 1.0
+    return min(1.0, max(0.05, elapsed / total))
+
+
+def _last_bar_partial(market: str, last_bar_date, now: "datetime | None" = None) -> tuple:
+    """Is the newest OHLCV bar still forming (today's bar, session not closed)?
+
+    Returns (bar_partial, session_elapsed_frac). A bar from any earlier date —
+    or today's bar after the close — is complete: (False, 1.0).
+    """
+    try:
+        from zoneinfo import ZoneInfo
+    except Exception:  # pragma: no cover
+        return False, 1.0
+    tz = {"cn_a": "Asia/Shanghai", "cn_hk": "Asia/Hong_Kong",
+          "us": "America/New_York"}.get(market)
+    if not tz or not last_bar_date:
+        return False, 1.0
+    local = now or datetime.now(ZoneInfo(tz))
+    if local.tzinfo is None:
+        local = local.replace(tzinfo=ZoneInfo(tz))
+    local = local.astimezone(ZoneInfo(tz))
+    today = local.strftime("%Y-%m-%d")
+    if str(last_bar_date)[:10] != today:
+        return False, 1.0
+    frac = _session_elapsed_frac(market, now=local)
+    return frac < 1.0, frac
+
+
+def calc_volume_analysis(volumes: list, closes: list,
+                         session_elapsed_frac: float = None) -> dict:
+    """Analyze volume patterns. Tolerates None volumes (aligned with valid_bars).
+
+    O-2: when the newest bar is still forming (intraday run), its raw volume is
+    a *partial-day* figure and comparing it against full-day 5-day averages
+    understates vol_ratio (the 14:24 华能国际 0.60 / 苏泊尔 0.16 artifacts).
+    Pass `session_elapsed_frac` (from `_last_bar_partial`) to pro-rate the
+    current bar to a full-day equivalent before the ratio; `vol_ratio_raw`
+    keeps the unadjusted value and `bar_partial`/`session_elapsed_pct` let the
+    card flag the intraday caveat. Backtest/historical calls omit the argument
+    and behave exactly as before (bar_partial False, no adjustment).
+    """
+    partial = session_elapsed_frac is not None and session_elapsed_frac < 1.0
+    out = {"bar_partial": partial}
+    if partial:
+        out["session_elapsed_pct"] = round(session_elapsed_frac * 100, 1)
+
     if len(volumes) < 6 or len(closes) < 2:
-        return {"vol_ratio": None, "trend": "insufficient_data"}
+        out.update({"vol_ratio": None, "trend": "insufficient_data"})
+        return out
 
     # 5-day average volume (excluding today); skip None/zero entries
     prev5 = [v for v in volumes[-6:-1] if v]
@@ -2169,6 +2249,11 @@ def calc_volume_analysis(volumes: list, closes: list) -> dict:
     avg_vol_5 = (sum(prev5) / len(prev5)) if prev5 else None
     vol_ratio = (round(curr_vol / avg_vol_5, 2)
                  if (curr_vol and avg_vol_5) else None)
+    if partial:
+        out["vol_ratio_raw"] = vol_ratio
+        if vol_ratio is not None:
+            vol_ratio = round(vol_ratio / session_elapsed_frac, 2)
+    out["vol_ratio"] = vol_ratio
 
     # Price change direction
     price_up = closes[-1] >= closes[-2]
@@ -2187,7 +2272,8 @@ def calc_volume_analysis(volumes: list, closes: list) -> dict:
     else:
         trend = "normal"
 
-    return {"vol_ratio": vol_ratio, "trend": trend}
+    out["trend"] = trend
+    return out
 
 
 def calc_bias(closes: list, ma_data: dict) -> dict:
@@ -2606,7 +2692,12 @@ def analyze_stock(code: str, days: int = 120, fetch_news: bool = False) -> dict:
     ma = calc_ma(closes, [5, 10, 20, 60])
     macd = calc_macd(closes)
     rsi = calc_rsi(closes, [6, 12, 24])
-    vol = calc_volume_analysis(volumes, closes)
+    # O-2: today's still-forming bar must be pro-rated before vol_ratio
+    # (backtest path in compute_signal_from_ohlcv deliberately stays unadjusted)
+    _, session_frac = _last_bar_partial(
+        market, valid_bars[-1].get("date") if valid_bars else None)
+    vol = calc_volume_analysis(volumes, closes,
+                               session_elapsed_frac=session_frac)
     bias = calc_bias(closes, ma)
     support = calc_support(closes, ma)
     # Phase/position context: separates uptrend pullback from downtrend decline,
