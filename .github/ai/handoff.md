@@ -1,24 +1,49 @@
-# Stock-Analysis Skill — Handoff 文档
+---
+document: handoff
+project: skill-stock-analysis
+updated: 2026-09-17
+status: active
+owner: maintainer
+decision_log: .github/handoff/DECISIONS.md
+---
 
-> **创建日期**：2026-09-09
-> **当前阶段**：
-- P0–P3 已完成 ✅；
-- P4 全部完成 ✅（含 4-4c 样本外验收 + 遗留项闭环）
-> **4-4c 验收（最终）**：
-- Sharpe 0.54 ✅
-- max_dd 7.3% ✅
-- PF 1.405（目标关闭：已验证小样本不可达）✅
-- coverage 20.5% ✅（口径修订为 ≥20%） **4/4 达成**
-> **下一步**：
-- 无遗留。系统可上模拟盘；
-- 优化方向与优先级见 §15；模拟盘日常运行见 §13；
-- 决策与拒绝项记录：`DECISIONS.md`（NEXT_STEPS.md 已并入本文档 §14 后删除）
-- 研究档案（原 ROADMAP.md，2026-09-15 并入）：§16
-> **测试基线**：`python3 -m pytest tests/ -q` → **158 passed**
+# Stock-Analysis Skill — Handoff
+
+> **用途**：为下一次开发会话提供可执行的项目状态、证据、运行手册和任务入口。
+> **维护原则**：当前状态与待办放在前面；运行操作与历史研究分开；已否决事项不删除，只保留结论和证据。
+
+## 阅读顺序与分类
+
+| 分类 | 内容 | 章节 |
+|---|---|---|
+| 当前状态 | 阶段结果、核心指标、已交付能力 | §1–§3、§7–§9 |
+| 运行手册 | 文件地图、复跑命令、新会话清单、模拟盘流程 | §4–§6、§11–§13 |
+| 工程记录 | 收尾修复、优化方向、决策约束 | §14–§15、`DECISIONS.md` |
+| 历史档案 | P0–P4 研究证据与负知识 | §16 |
+| 后续任务 | 按 P0/P1/P2 排序的需求差异 | §17 |
+
+### 当前快照
+
+- P0–P3 已完成；P4 全部完成，含 4-4c 样本外验收和遗留项闭环。
+- 4-4c 最终结果：Sharpe **0.54**、max_dd **7.3%**、coverage **20.5%**；PF 目标已关闭，原因见 `DECISIONS.md` D5。
+- 系统可上模拟盘，但新版需求中的基本面、完整估值、用户组合、投资 thesis 和结构化报告仍属于 §17 待办。
+- 测试基线：`python3 -m pytest tests/ -q` → **171 passed**。
+
+### 下一步
+
+1. 按 §17 的 N-01 → N-03 固定统一输出、错误、数据质量和市场规则契约。
+2. 按 N-04 → N-06 补齐基本面、估值和股票风险分类；在此之前不把技术结果包装为完整长期投资结论。
+3. 按 N-07 → N-12 完成组合、thesis、报告、测试和文档路由收口。
+
+### 记录约定
+
+- `✅`：已完成或当前生效；`⚠️`：有条件生效/需要后续验证；`❌`：已否决或关闭。
+- §14–§17 是可执行记录；§16 是历史研究档案，不作为新的任务清单。
+- 方法论、架构和拒绝项记录在 [.github/handoff/DECISIONS.md](DECISIONS.md)；实现任务记录在本文件 §17。
 
 ---
 
-## 1. 项目概述
+## 1. 项目概述（当前状态）
 
 对股票分析 skill 的评分系统进行实证优化。
 原始评分（`calc_trend_score`）在 20d 前向收益上 IC 为 -0.04，几乎全部来自下跌段（downtrend_decline IC -0.066）。
@@ -26,7 +51,7 @@
 
 ---
 
-## 2. 阶段成果
+## 2. 阶段成果（交付历史）
 
 ### P0 — 扩大证据基础 ✅
 - **结论**：负 IC 是结构性缺陷（阶段依赖），非窗口伪影
@@ -74,7 +99,7 @@
 
 ---
 
-## 3. 核心数据（必须记住）
+## 3. 核心数据（证据快照）
 
 ### P0 核心 IC（20d，29,476 信号）
 
@@ -104,9 +129,17 @@
 
 ---
 
-## 4. 文件结构
+## 4. 文件结构（运行手册）
 
 ```
+.github/handoff/
+├── HANDOFF.md            # 当前状态、运行手册、待办和研究档案
+└── DECISIONS.md          # 生效/否决决策及其证据
+
+docs/
+├── SKILL.md              # Agent 工作流与调用约束
+└── requirement.md        # 产品需求基线
+
 references/
 ├── stock_data_fetcher.py   # 核心：analyze_stock() / backtest_stock() / calc_trend_score()
 ├── mr_signal.py            # P1-5: 均值回归 + 候选组件（compute_components）
@@ -120,6 +153,7 @@ references/
 ├── paper_trader.py         # P4-4: 模拟盘回放引擎（T+1/涨跌停/费用/风控闸门/绩效）
 ├── risk_monitor.py         # P4-5: 风控监控（仓位/止损/熔断/EOD 报告）
 ├── score_calibration.py    # P1-7: 分数→概率校准
+├── component_calibration.py # O-8: 组件/combo 概率校准研究（不接入仓位）
 └── score_config.py         # P3-14: 阈值配置中心（含 COMBO 组合参数 + RISK 风控参数）
 
 reports/
@@ -131,6 +165,8 @@ reports/
 ├── p2_schedule.json        # P2-12 组合模拟
 ├── p4_combo_backtest.json  # P4-1b/1c 组合回测验收
 ├── p4_paper_trader_oos.json # P4-4c 样本外回放验收（Sharpe 0.54 / dd 7.31% / PF 1.405 / coverage 20.5%）
+├── o8_component_calibration_fixed.json  # O-8 固定池 OOT 校准
+├── o8_component_calibration_random.json # O-8 random holdout 校准
 └── signals.db              # P4-3 SQLite 持久层（gitignore，可由缓存重建）
 
 tests/
@@ -139,20 +175,24 @@ tests/
 ├── test_mr_signal.py       # P1 组件 4 项
 ├── test_p2_execution.py    # P2 执行 6 项
 ├── test_score_config.py    # P3-14 阈值 5 项
-├── test_signal_combo.py    # P4-1 组合信号 5 项
+├── test_signal_combo.py    # P4-1/O-7 组合 gate 与研究模式 7 项
 ├── test_analyze_combo.py   # P4-2 analyze_stock combo 接入 4 项
 ├── test_store.py           # P4-3 SQLite 持久层 7 项
 ├── test_paper_trader.py    # P4-4 模拟盘引擎 31 项（20 执行 + 11 风控/指标）
 ├── test_risk_monitor.py    # P4-5 风控监控 23 项
 ├── test_valuation_fallback.py  # O-1 估值兜底链 + 腾讯优先（tencent/akshare/efinance/yfinance）24 项
 ├── test_bar_partial.py     # O-2 盘中 bar 标记 + vol_ratio 折算 22 项
-└── test_name_unify.py      # O-3 realtime.name 统一中文名（CJK 清洗 + 回填链）16 项
-（合计 158 项：`python3 -m pytest tests/ -q` 全绿，~0.5s）
+├── test_name_unify.py      # O-3 realtime.name 统一中文名（CJK 清洗 + 回填链）16 项
+├── test_unlock_fallback.py # O-4 解禁多源回退 + 闸门状态 3 项
+├── test_output_format.py   # O-5 决策卡片 Hard Gates 展示契约 2 项
+├── test_daily_update.py    # O-6 日常编排参数与阶段选择 3 项
+└── test_component_calibration.py # O-8 组件概率校准 3 项
+（合计 171 项：`python3 -m pytest tests/ -q` 全绿，~0.5s）
 ```
 
 ---
 
-## 5. 复跑命令
+## 5. 复跑命令（运行手册）
 
 ```bash
 # P0 全量（缓存命中 <2 分钟）
@@ -190,7 +230,7 @@ python3 -m pytest tests/ -q
 
 ---
 
-## 6. 已知数据源事实
+## 6. 已知数据源事实（运行约束）
 
 - 腾讯美股 K 线仅覆盖 NASDAQ（.OQ），NYSE 代码（JPM/JNJ/KO/XOM）仅返回 1 根 → yfinance 兜底
 - tencent usSPY 不可用 → 基准用 SPY@yfinance
@@ -203,7 +243,7 @@ python3 -m pytest tests/ -q
 
 ---
 
-## 7. P4-1 信号组合架构 ✅（2026-09-10）
+## 7. P4-1 信号组合架构 ✅（交付能力，2026-09-10）
 
 ### 目标
 构建分 phase 分工的信号组合，超越单一 comp_vol（Sharpe 0.046）。**已达成**。
@@ -340,7 +380,7 @@ API：
 
 ---
 
-## 8. P4 完整任务清单
+## 8. P4 完整任务清单（验收记录）
 
 | 任务 | 内容 | 验收 | 状态 |
 |---|---|---|---|
@@ -352,7 +392,7 @@ API：
 
 ---
 
-## 9. 风控参数（已固化到 score_config.py）
+## 9. 风控参数（配置基线，已固化到 score_config.py）
 
 ```python
 SIGNAL_THRESHOLDS = {"strong_buy": 75.0, "buy": 60.0, "hold": 45.0, "wait": 30.0}
@@ -364,7 +404,7 @@ RISK = {"max_per_stock": 0.20, "max_per_phase": 0.60, "stop_loss_pct": 0.08, "ci
 
 ---
 
-## 10. 关键 Git Commits
+## 10. 关键 Git Commits（变更索引）
 
 ```
 9bf6a8a hardening: P4 combo 模块自动定位（$SDF_REFERENCES_DIR → 脚本目录 → cwd/references → 向上）
@@ -393,20 +433,20 @@ c798383 P0: expand backtest evidence base
 
 ---
 
-## 11. 新会话启动清单
+## 11. 新会话启动清单（运行手册）
 
 ```bash
 # 1. 进入目录
 cd /home/wwei/workspace/skill-stock-analysis
 
 # 2. 读交接文档 + 决策记录
-cat HANDOFF.md DECISIONS.md
+cat .github/handoff/HANDOFF.md .github/handoff/DECISIONS.md
 
 # 3. 验证环境
-python3 -m pytest tests/ -q          # 158 passed
+python3 -m pytest tests/ -q          # 171 passed
 python3 references/p0_backtest.py    # P0 全量（缓存 <2 min）
 
-# 4. P4 收官（4/4 指标达成），无遗留。复跑样本外验收：
+# 4. P4 已收官（4/4 指标达成）；新版需求差异与后续任务见 §17：
 #    python3 references/p4_combo_backtest.py --save-store reports/signals.db
 #    python3 references/paper_trader.py --db reports/signals.db --start 2025-09-01
 #    → 结果见 reports/p4_paper_trader_oos.json
@@ -414,7 +454,7 @@ python3 references/p0_backtest.py    # P0 全量（缓存 <2 min）
 
 ---
 
-## 12. 注意事项
+## 12. 注意事项（工程约束）
 
 1. **不要修改 `stock_data_fetcher.py` 的核心评分逻辑**（`_DEFAULT_WEIGHTS` / `calc_trend_score`）除非有新的 IC 证据——A/B 已证明调权无效
 2. **不要在下坡段依赖动量总分**——IC 为负，权重只能改幅度不能改符号
@@ -424,7 +464,7 @@ python3 references/p0_backtest.py    # P0 全量（缓存 <2 min）
 
 ---
 
-## 13. 模拟盘日常运行路径（P4 收官后）
+## 13. 模拟盘日常运行路径（运行手册）
 
 ```
 每日/每周：analyze_stock() 产出 combo 字段
@@ -452,7 +492,7 @@ python3 references/paper_trader.py --db reports/signals.db \
 
 ---
 
-## 14. 收尾修复记录（2026-09-15，文档同步期间发现并修复）
+## 14. 收尾修复记录（已完成，2026-09-15）
 
 > 本节内容来自原 `NEXT_STEPS.md`——该文档已并入本文档（本节 + §15）后删除。
 > 数据链路硬化（2026-09-14）见 §6；决策与拒绝项见 `DECISIONS.md`。
@@ -470,7 +510,7 @@ python3 references/paper_trader.py --db reports/signals.db \
 
 ---
 
-## 15. 优化方向与优先级（2026-09-15 评审定稿）
+## 15. 优化方向与优先级（待办 backlog，2026-09-15 评审定稿）
 
 > 评审原则：预期信息增量 × 实现成本 × 过拟合风险。研究类改动（P2）必须走 DECISIONS.md D9 的流程
 > （先验设计 → 冻结池 → holdout 复现 → 样本内调参 → 样本外验收）；决策与拒绝项记录在 DECISIONS.md。
@@ -482,16 +522,16 @@ python3 references/paper_trader.py --db reports/signals.db \
 | O-1 ✅ | 估值字段兜底：P/E、P/B 多源回退链（tencent/akshare/efinance/yfinance） | 苏泊尔实跑 THS valuation 429 → 卡片 P/E、P/B N/A | ✅ 连续两次实跑字段齐全（2026-09-16，见 §15.1） |
 | O-2 ✅ | 盘中 bar 标记 + vol_ratio 口径修正 | 华能国际 14:24 运行 vol_ratio 0.60、苏泊尔 0.16 均为半日 bar 失真 | ✅ JSON 增 `bar_partial`；卡片标注（2026-09-16，见 §15.3） |
 | O-3 ✅ | realtime.name 回填 display name | 苏泊尔 `realtime.name='002032'` 而非"苏泊尔" | ✅ 各来源输出统一中文名（2026-09-16，见 §15.4） |
-| O-4 | 解禁数据替代源 | 两次实跑均 `no upcoming unlock data` → 闸门空转 | 有数据，或显式输出"闸门未启用" |
-| O-5 | 卡片展示硬闸门行 `Hard Gates: fired(...)/none` | 闸门只在 JSON `buy_gates`；Strong Buy 与 combo 负分并存时易误读 | 模板更新 + 单测 |
-| O-6 | `daily_update.py` + cron 模板（§13 流程一键化） | 日常流程需手敲多条命令 | 一条命令完成灌库；周末自动回放 |
+| O-4 ✅ | 解禁数据替代源 | 两次实跑均 `no upcoming unlock data` → 闸门空转 | ✅ EM 解禁批次优先、Sina 回退；无比例时显式 `unlock_gate_status=not_enabled` |
+| O-5 ✅ | 卡片展示硬闸门行 `Hard Gates: fired(...)/none` | 闸门只在 JSON `buy_gates`；Strong Buy 与 combo 负分并存时易误读 | ✅ 模板新增 Hard Gates 行 + 2 项契约测试 |
+| O-6 ✅ | `daily_update.py` + cron 模板（§13 流程一键化） | 日常流程需手敲多条命令 | ✅ 一条命令完成灌库 + 回放；cron 示例含工作日刷新和周末回放 |
 
 ### P2 研究（须走 D9 流程，防过拟合）
 
 | # | 优化 | 依据 | 验收 |
 |---|---|---|---|
-| O-7 | mom_confirm 用裸 20 日动量/OBV 替代总分 | P1-6：非下跌段裸动量 IC +0.042、OBV +0.048，总分仅 +0.001 | A/B 后 uptrend 组合 IC 与 OOS Sharpe 不降 |
-| O-8 | 组件/combo 级概率校准 → 驱动仓位大小 | P1-7 只证伪总分，组件未试 | OOT Brier < 常数基线 |
+| O-7 ⚠️ | mom_confirm 用裸 20 日动量/OBV 替代总分 | 固定池 `chg20` 有提升，但 random holdout net Sharpe：score 0.118 > chg20 0.099 > obv 0.075 | ❌ 不替换生产默认；保留 `--mom-confirm-mode chg20|obv` 研究开关，变更前须重新 OOS 验收 |
+| O-8 ⚠️ | 组件/combo 级概率校准 → 驱动仓位大小 | 固定池四项均未过；random 仅 `mr_score` / `combo_score` 略过 | ❌ 不接入仓位；combo random 改善仅 0.00015，未来须固定池 + holdout 同时过 OOT Brier |
 | O-9 | downtrend 死分支：放宽触发（研究）或删除（简化） | OOS downtrend 交易 0 笔；P1-5 离散事件版 27 次、均值 -2.17% 不可用 | 放宽版须正 IC；否则删分支降低复杂度 |
 | O-10 | 新闻事件分类 + 公司专属/行业列表区分 | 10 条新闻全 neutral、event_type 全 other、多为列表新闻 | 有公司专属事件时 sentiment 非 0 |
 | O-11 | 持有期按 phase 分层（5/10/20 IC 已在 FORWARD 配置） | P0 已算三档 IC | 分层后 OOS 不降 |
@@ -542,7 +582,7 @@ python3 references/paper_trader.py --db reports/signals.db \
 
 **验收证据**：
 
-- 单测 24 项（`tests/test_valuation_fallback.py`）：符号映射、链序（含"后续源不得被调用"）、腾讯 A 股/港股 K 线与实时行情优先级（含回退路径）、单源抛错跳过、全空返回 `{}`、`valuation_source` 语义、`pe_ttm`→`pe_ratio` 镜像、港股腾讯 P/E 保留 + yfinance 补 P/B；全套 **158 passed**（原 105 项无回归）。
+- 单测 24 项（`tests/test_valuation_fallback.py`）：符号映射、链序（含"后续源不得被调用"）、腾讯 A 股/港股 K 线与实时行情优先级（含回退路径）、单源抛错跳过、全空返回 `{}`、`valuation_source` 语义、`pe_ttm`→`pe_ratio` 镜像、港股腾讯 P/E 保留 + yfinance 补 P/B；当时全套 **158 passed**（原 105 项无回归）。
 - 端到端强制 THS valuation 429（patch `_fuyao_get` 对 valuations 路径抛错）：`002032` PE 15.58 / PB 6.25、`600011` PE 9.19 / PB 1.67，均 `valuation_source=tencent`；港股禁用东财源后 PE 15.89 / PB 2.95，`valuation_source=yfinance`。
 - **实跑（2026-09-16，三次连续，`--stocks 002032,600011,HK00700 --days 120`）**：
 
@@ -603,11 +643,11 @@ python3 references/paper_trader.py --db reports/signals.db \
 - `_resolve_code_name_akshare(code)`：`_resolve_cn_name_akshare` 的反向查表（code→名），**进程级缓存 + 失败熔断**——东财系不可达时该表会挂 ~35s，熔断保证退化场景最多慢一次、不按股票数放大（名字退化仅外观问题，不影响信号）。
 - `analyze_stock` 接线：fetch 后统一 `raw["name"]` 与 `raw["realtime"]["name"]`；news 搜索用 `raw["name"]`，同步受益（搜"苏泊尔"而非"002032"）；`calc_tradability` 的 ST 判定因拿到真实名称更准。
 
-**验收**：单测 16 项（`tests/test_name_unify.py`：CJK 清洗 / 真名直通 / 港美股不回填 / THS 搜索命中与 miss→akshare 链 / 异常存活 / analyze 接线三态）；全套 **158 passed**。实跑（002032/600011/HK00700/AAPL）`realtime.name` 全部为中文名且记录名一致。
+**验收**：单测 16 项（`tests/test_name_unify.py`：CJK 清洗 / 真名直通 / 港美股不回填 / THS 搜索命中与 miss→akshare 链 / 异常存活 / analyze 接线三态）；当时全套 **158 passed**。实跑（002032/600011/HK00700/AAPL）`realtime.name` 全部为中文名且记录名一致。
 
 ---
 
-## 16. 研究档案（原 ROADMAP.md，2026-09-15 并入本文档后删除）
+## 16. 研究档案（历史记录，原 ROADMAP.md）
 
 > 原 `ROADMAP.md`（2026-09-09 创建，P0–P4 全部收官）并入本节后删除。与 §3 / §7 / §8 / DECISIONS
 > 重复的数字已去重，本节只保留**独有证据与负知识**；原始数据见 `reports/*.json`。
@@ -697,3 +737,120 @@ uptrend comp_vol net +0.051 / range comp_vol net +0.043。
 
 残留风险 → 已映射优化项（§15）：过拟合/单窗口 → O-12；容量 → O-13；regime 切换滞后 → O-14；
 止损拉低 PF → O-15。
+
+---
+
+## 17. 新版需求差异与后续任务（当前 backlog，2026-09-17）
+
+> 本节以 2026-09-17 的 `docs/requirement.md` 与 `docs/SKILL.md` 为基准，针对当前代码静态核对后新增。
+> 结论来自 `references/stock_data_fetcher.py`、`risk_monitor.py`、`store.py`、`output-format-template.md` 及现有测试；本次仅更新交接文档，未修改实现。
+> 当前已知测试基线仍为 `python3 -m pytest tests/ -q` → 171 passed（本次审计未重跑）。
+
+### 17.1 已确认落地的能力边界
+
+- A 股、港股、美股识别，行情/K 线多源降级，前复权数据，以及 `data_source`、`fetch_errors`、`as_of`、`adjustment` 等基础字段已存在。
+- MA、MACD、RSI、成交量、Bias、相对强弱、ATR 止损/目标、R:R、phase-aware combo、盘中 bar 标记已实现并有测试。
+- 新闻搜索/情绪摘要、T+1/涨跌停/费用执行模拟、模拟盘回放、RiskMonitor、SQLite signals/trades/portfolio 持久化、回测/校准/A-B 工具已实现。
+- 估值目前只具备 P/E、P/B 的部分多源回退；这不等同于完整估值工作流。
+- `risk_monitor.py` 的仓位/止损/熔断是执行风控；这不等同于 requirement 要求的股票风险分类模型。
+- `store.py` 的 portfolio 是模拟盘日快照；这不等同于用户持仓组合分析。
+
+### 17.2 P0：先完成统一契约与核心分析能力
+
+#### N-01 统一结构化输出、错误与数据质量契约
+
+- **差异**：CLI 当前主要输出 `stocks`、`errors[]`、`total_success`；缺少统一的 `success` 和 `{code, message, retryable}` 错误对象。单股结果缺少 `currency`、显式 `fallback_used`、质量等级、缺失字段、质量 caveat 及对 confidence 的影响。
+- **范围**：统一 `analyze_stock()` 与 `main()` 的成功、部分成功、全失败、无数据和重试错误结构；记录实际使用的数据源与回退链，不把可用库列表当作实际来源；保留部分股票失败时的可用结果。
+- **验收**：成功/部分失败/全失败/无效 ticker/数据源超时均输出 schema 一致的 JSON；A-share/HK/US 均有正确 `currency`；每份结果有 `as_of`、更新时间、调整方式、来源、fallback、缺失数据和质量影响。
+
+#### N-02 统一决策状态与决策证据对象
+
+- **差异**：代码仍输出 `trend_score.signal` 的 `strong_buy/buy/hold/wait/sell/strong_sell`，未输出 requirement/SKILL 要求的 `STRONG_AVOID`、`AVOID`、`WATCHLIST`、`BUY_CANDIDATE`、`SMALL_POSITION_ONLY`、`HOLD`、`REDUCE`、`SELL_OR_EXIT`、`RECHECK_REQUIRED`。
+- **范围**：增加意图/期限感知的 decision-support 层，区分技术交易与长期投资；补齐 confidence、supporting/opposing evidence、key risks、suggested action range、position-size suggestion、re-evaluation triggers、data quality warning 和 disclaimer。技术分数只能作为输入，不能单独生成长期投资结论。
+- **验收**：每个决策只能落在允许枚举；技术硬闸门、基本面缺失、估值缺失、组合集中度和低数据质量能降低或阻断决策；长期分析保留技术弱势的 `WATCHLIST`/`SMALL_POSITION_ONLY` 例外。
+
+#### N-03 补齐市场归一化与交易规则对象
+
+- **差异**：`classify_stock()` 支持 `HK00700`，但不支持需求明确列出的 `0700.HK`；结果没有币种字段，也没有独立的市场规则对象。
+- **范围**：统一 HK ticker 输入/输出；增加 A-share/HK/US 的 currency、交易所/市场、lot size、交易日、T+1、涨跌停/熔断及执行限制字段，并让报告显式引用这些限制。
+- **验收**：`HK00700`、`0700.HK`、`AAPL`、A 股后缀/前缀均归一到同一内部标识；三市场货币和规则测试覆盖；原有回测代码行为不回归。
+
+#### N-04 实现基本面数据层与基本面分析
+
+- **差异**：当前没有财报/基本面分析函数或字段，仅有少量行情估值补充，未覆盖收入/利润增长、毛利率、净利率、ROE/ROIC、经营现金流、自由现金流、现金转换、负债/有息债、流动性、股息、行业/同业和竞争地位。
+- **范围**：建立市场差异可容纳的财报 schema，记录报告期、币种、来源、单位、TTM/年度口径和缺失原因；实现基础质量维度（profitability、growth、cash flow quality、financial safety、competitive position）及同业比较入口；数据不可用时返回缺失状态并降低置信度，不填充猜测值。
+- **验收**：A/H/US 至少能解析可获得的共同指标；字段缺失可逐项表达；基本面分析可独立于技术分析运行；没有基本面证据时不能生成长期 `BUY_CANDIDATE`。
+
+#### N-05 实现完整估值工作流
+
+- **差异**：已有 P/E、P/B 回退，部分来源带 P/S、P/CF；未实现 EV/EBITDA、股息率、历史分位、同业/市场比较、成长调整估值、margin of safety、估值范围和 `LOW` 至 `INSUFFICIENT_DATA` 分类。
+- **范围**：在 N-01 的来源/报告期 schema 上补齐可用估值指标及估值分类；对缺失或口径不一致的字段标记不可比；长期分析优先输出估值区间而非伪精确目标价。
+- **验收**：估值分类只能使用规范枚举；全字段不可用时为 `INSUFFICIENT_DATA`；跨市场货币、TTM/年度和异常负 PE 均有测试；估值结论能进入决策层并影响 confidence。
+
+#### N-06 建立分析风险分类模型，与执行风控分离
+
+- **差异**：`RiskMonitor` 目前只负责仓位、phase、止损、熔断和 EOD；没有 financial/business/valuation/technical/market/liquidity/policy/currency/portfolio concentration 九类风险及 LOW/MEDIUM/HIGH/CRITICAL 等级。
+- **范围**：新增股票分析风险对象 `{category, severity, evidence, impact, monitoring_indicator}`；接入市场规则、数据质量、估值、财务和组合上下文；保留 `RiskMonitor` 作为模拟盘执行层，不混用两套职责。
+- **验收**：每个风险标记结构一致；无证据时不伪造风险事实但能返回 `INSUFFICIENT_DATA`/数据警告；风险等级可阻断或降级决策，并有九类风险与四级等级测试。
+
+### 17.3 P1：补齐投资者工作流
+
+#### N-07 实现用户组合分析
+
+- **差异**：`p2_schedule.py` 是策略轮动模拟，`store.py` 的 portfolio 是账户快照，均未实现用户 holdings 输入和组合暴露分析。
+- **范围**：支持 base currency、持仓数量/权重、成本价、币种、行业、风险容忍度和可配置集中度上限；计算总资产、单股/行业/市场/币种暴露、高风险暴露、浮盈亏、股息贡献、波动率、回撤、现金比例及增加该标的后的边际风险。
+- **验收**：权重和汇率口径明确；缺行业/汇率/成本时逐项警告；输出集中度风险、建议最大仓位和可解释的 add/hold/reduce 建议；与模拟盘 portfolio schema 分名隔离。
+
+#### N-08 实现 investment thesis 记录与复核
+
+- **差异**：没有 thesis 数据结构、持久化、CLI 或复核逻辑，也没有 `THESIS_VALID`、`THESIS_WEAKENED`、`THESIS_BROKEN`、`INSUFFICIENT_DATA` 状态。
+- **范围**：扩展 `store.py` 或新增专用持久层，记录 ticker、市场、公司、买入日期/价格/仓位/币种、买入理由、核心 thesis、期限、回报驱动、风险、退出条件、跟踪指标、复查计划和复查笔记；用当前基本面/估值/风险数据逐条核对原假设。
+- **验收**：可创建、读取、更新、按计划复查；证据不足不判定 thesis 有效；状态变更保留时间和依据；测试覆盖持久化幂等、四种复核状态和缺失数据。
+
+#### N-09 实现结构化报告生成
+
+- **差异**：当前主要由 Agent 根据模板生成报告；`output-format-template.md` 仍偏技术卡片，缺 Fundamental Summary、Portfolio Fit、Re-evaluation Triggers、Confidence、Opposing Evidence、Data Quality 和固定免责声明。
+- **范围**：从统一 JSON 生成单股/多股/组合 Markdown；报告按用户语言输出，保留原始货币；明确基本信息、决策、期限、估值、技术、基本面、新闻、证据、风险、止损/目标或估值区间、组合适配、复评触发器、来源/as_of、免责声明。
+- **验收**：报告不读取隐藏推理，所有结论能追溯到结构化字段；数据缺失和回退源可见；每份用户报告包含 requirement 规定的完整免责声明；新增单股、组合和多股摘要测试。
+
+#### N-10 补齐硬闸门与契约测试
+
+- **差异**：`calc_trend_score()` 对 RSI 和 Bias 主要是降分，尚未显式保证 `RSI > 80`、`MA5 bias > 5%` 永不产生 `BUY_CANDIDATE`；现有测试未覆盖新版完整输出契约、基本面、风险、组合、thesis 和报告。
+- **范围**：在技术决策层增加两条显式 gate，并区分技术短中期与长期例外；补充 ticker、市场规则、币种、数据回退、错误 JSON、估值分类、风险对象、组合、thesis、报告和 disclaimer 测试。
+- **验收**：两个极端条件无论其他分数多高都不能产生技术 `BUY_CANDIDATE`；完整测试覆盖成功、失败、部分数据和跨市场场景。
+
+### 17.4 P2：文档、路由与命名收口
+
+#### N-11 同步 SKILL、模板、分析提示词与 README
+
+- **差异**：`SKILL.md` 已描述基本面/估值/组合/thesis，但没有对应代码 schema；`output-format-template.md` 仍使用旧 signal 名称；`analysis-prompt-template.md` 默认英文、要求精确 entry price，超过脚本可靠输出；README 将模拟盘快照描述为组合能力。
+- **范围**：待 N-01 至 N-09 的 schema 稳定后，同步文档的触发矩阵、输入输出、实际 CLI、缺失数据行为、用户语言、决策枚举、固定免责声明和能力边界；明确“研究回测组合”“模拟盘账户”“用户投资组合”三个名称。
+- **验收**：文档中的每个字段、命令和示例均能在代码或测试中找到对应实现；不再承诺当前没有的 MCP、entry price 或基本面能力。
+
+#### N-12 明确 skill 路由与可选能力边界
+
+- **差异**：当前只有一个主 `SKILL.md`，推荐的 `stock-fundamental-analysis`、`stock-valuation-analysis`、`stock-portfolio-analysis`、`stock-investment-thesis`、`stock-report-generation` 等只是文档中的概念；backtest/calibration 也未在 frontmatter trigger scenarios 中单独体现。
+- **范围**：在不重复拆分代码的前提下，先定义主 skill 的意图路由矩阵和委托 schema；若后续拆分 skill，保持共享输出契约；明确外部 MCP 基本面增强的输入、合并、来源和降级规则。
+- **验收**：技术、波段、长期投资、估值、风险、组合、thesis、回测请求均能映射到明确 workflow；无对应数据时输出规范化降级结果。
+
+### 17.5 执行顺序与依赖
+
+```text
+N-01 统一输出/错误/数据质量
+  -> N-02 决策状态与证据
+  -> N-03 市场归一化与规则
+  -> N-04 基本面
+  -> N-05 估值
+  -> N-06 风险分类
+  -> N-07 组合分析 + N-08 thesis
+  -> N-09 报告生成
+  -> N-10 全量契约测试
+  -> N-11/N-12 文档与 skill 路由收口
+```
+
+**优先级裁决：**
+
+1. 先做 N-01 至 N-03，先固定跨市场输入、错误、数据质量和决策输出边界，后续模块不得各自发明字段。
+2. 再做 N-04 至 N-06，补齐长期投资所需的基本面、估值和风险证据；在此之前不得把当前技术结果包装成完整长期投资结论。
+3. 随后做 N-07 至 N-10，完成组合、thesis、报告和端到端测试，形成可供 AI 稳定消费的个人投资决策支持闭环。
+4. 最后做 N-11 至 N-12，文档以实际 schema 和测试为准；不把“SKILL.md 已写明”当作功能已实现。

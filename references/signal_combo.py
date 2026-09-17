@@ -67,7 +67,19 @@ def _mom_value(mom_scores, i):
     return None if not np.isfinite(v) else v
 
 
-def _assemble_combo(phase, ctx, comp, i, mom=None):
+def _obv20_series(ohlcv):
+    """Return no-lookahead 20-bar OBV changes aligned to ``ohlcv``."""
+    closes = np.asarray([_safe(b.get("close"), np.nan) for b in ohlcv], dtype=float)
+    vols = np.asarray([_safe(b.get("volume"), 0.0) for b in ohlcv], dtype=float)
+    obv = np.cumsum(np.where(np.diff(closes, prepend=closes[:1]) >= 0, vols, -vols))
+    out = np.full(len(ohlcv), np.nan)
+    if len(ohlcv) > 20:
+        out[20:] = obv[20:] - obv[:-20]
+    return out
+
+
+def _assemble_combo(phase, ctx, comp, i, mom=None, mom_confirm_mode="score",
+                    obv20=None):
     """Assemble the combo signal dict for component bar i under `phase`.
 
     Pure function over pre-computed arrays (used by both entry points).
@@ -86,7 +98,15 @@ def _assemble_combo(phase, ctx, comp, i, mom=None):
         weight = COMBO["weight_uptrend"]
         secondary, secondary_score = "mr_score", mr_score
         gates = ["momentum_confirm"]
-        if mom is not None:
+        if mom_confirm_mode == "chg20":
+            chg20 = ctx.get("chg_20d_pct")
+            results["momentum_confirm"] = (
+                chg20 is not None and chg20 >= COMBO["chg20d_confirm_min"])
+        elif mom_confirm_mode == "obv":
+            obv = _safe(obv20[i], np.nan) if obv20 is not None and i < len(obv20) else np.nan
+            results["momentum_confirm"] = (
+                np.isfinite(obv) and obv >= COMBO["obv20_confirm_min"])
+        elif mom is not None:
             results["momentum_confirm"] = mom >= COMBO["mom_confirm_min"]
         else:
             chg20 = ctx.get("chg_20d_pct")
@@ -133,7 +153,8 @@ def _assemble_combo(phase, ctx, comp, i, mom=None):
     }
 
 
-def compute_combo_signal(ohlcv, mom_scores=None, bench_closes=None):
+def compute_combo_signal(ohlcv, mom_scores=None, bench_closes=None,
+                         mom_confirm_mode="score"):
     """One-bar phase-aware combo signal.
 
     ohlcv rows: {date, open, close, high, low, volume} (mr_signal format).
@@ -154,10 +175,12 @@ def compute_combo_signal(ohlcv, mom_scores=None, bench_closes=None):
     phase = ctx.get("phase", "range_swing")
     mom = _mom_value(mom_scores, last)
     comp = compute_components(ohlcv)
-    return _assemble_combo(phase, ctx, comp, last, mom)
+    obv20 = _obv20_series(ohlcv) if mom_confirm_mode == "obv" else None
+    return _assemble_combo(phase, ctx, comp, last, mom, mom_confirm_mode, obv20)
 
 
-def combo_signal_series(ohlcv, mom_scores=None, min_bars=None):
+def combo_signal_series(ohlcv, mom_scores=None, min_bars=None,
+                        mom_confirm_mode="score"):
     """Per-bar combo signals aligned to ohlcv (warmup bars are None).
 
     compute_components runs once over the whole series (no look-ahead);
@@ -170,6 +193,7 @@ def combo_signal_series(ohlcv, mom_scores=None, min_bars=None):
     if n < 61:
         return [None] * n
     comp = compute_components(ohlcv)
+    obv20 = _obv20_series(ohlcv) if mom_confirm_mode == "obv" else None
     closes = [b["close"] for b in ohlcv if b.get("close") is not None]
     out = [None] * min_bars
     for i in range(min_bars, n):
@@ -181,5 +205,6 @@ def combo_signal_series(ohlcv, mom_scores=None, min_bars=None):
         ctx = calc_pullback_context(w_closes, ma)
         phase = ctx.get("phase", "range_swing")
         mom = _mom_value(mom_scores, i)
-        out.append(_assemble_combo(phase, ctx, comp, i, mom))
+        out.append(_assemble_combo(phase, ctx, comp, i, mom,
+                        mom_confirm_mode, obv20))
     return out

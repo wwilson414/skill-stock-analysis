@@ -1,0 +1,6 @@
+# Copy these entries into crontab after replacing REPO with an absolute path.
+# The working-day job refreshes the idempotent signal store after the market
+# closes; the weekend job replays the stored history and persists snapshots.
+
+30 18 * * 1-5 cd REPO && /usr/bin/python3 references/daily_update.py --signals-only >> reports/daily_update.log 2>&1
+00 09 * * 6   cd REPO && /usr/bin/python3 references/daily_update.py --replay-only --start 2025-09-01 >> reports/daily_update.log 2>&1

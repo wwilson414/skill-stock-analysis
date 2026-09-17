@@ -27,6 +27,11 @@ For each stock, output one card separated by `---`:
 | P/E Ratio | {pe_ratio} |
 | P/B Ratio | {pb_ratio} |
 
+**Hard Gates**: {hard_gates_status}
+
+> Render `fired({buy_gates})` when `trend_score.buy_gates` is non-empty; otherwise render `none`.
+> Preserve the gate text from the script so a buy-grade score cannot hide an execution block.
+
 **Combo Signal (phase-aware, P4-1)**
 - Phase: {combo_phase_en} | Primary: {combo_primary} | Weight: {combo_weight} | Combo Score: {combo_score}
 - Gate: {combo_gates_en} | Gate Blocked: {combo_gate_blocked_en} | Secondary: {combo_secondary}
@@ -37,7 +42,7 @@ For each stock, output one card separated by `---`:
 - Phase/Position: {phase_en} | 120-day range position {range_pos_pct}% | Distance from MA60 {dist_ma60_pct:+.2f}% | 20-day change {chg_20d_pct:+.2f}%
 - Relative Strength: vs {bench_en} 20D RS {rs_20d:+.2f}% | 60D RS {rs_60d:+.2f}%
 - Volatility & Risk Levels: ATR {atr} ({atr_pct}%) | Annualized Vol {ann_vol_pct}% | R:R Ratio {rr_ratio}
-- Trading Constraints/Events: {limit_status_en} | 30-day Unlock {unlock_pct_30d_str}
+- Trading Constraints/Events: {limit_status_en} | 30-day Unlock {unlock_pct_30d_str} ({unlock_gate_status})
 - MA: MA5={ma5} MA10={ma10} MA20={ma20} | {alignment_en}
 - MACD: DIF={dif} DEA={dea} Histogram={hist} | {macd_signal_en}
 - RSI: RSI6={rsi6} RSI12={rsi12} RSI24={rsi24} | {rsi_zone_en}

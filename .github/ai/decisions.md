@@ -1,10 +1,39 @@
-# Stock-Analysis Skill — 决策记录（Decision Log）
+---
+document: decisions
+project: skill-stock-analysis
+updated: 2026-09-17
+status: active
+companion: .github/handoff/HANDOFF.md
+---
 
-> **定位**：记录本项目所有**已定案的方法论 / 架构 / 产品决策**及其证据与拒绝项。
-> 与其他文档的分工：`README.md` = 使用者入口；`SKILL.md` = Agent 工作流；`HANDOFF.md` = 当前状态 / 待办 / 优化方向 / 研究档案（§16，原 ROADMAP）；**本文件 = 为什么是这样**。
-> **变更规则**：新增或修改决策必须附证据（报告文件或实验数字）与日期；被推翻的决策**不删除**，改标 ❌ 并注明推翻证据。
+# Stock-Analysis Skill — 决策记录
+
+> **职责**：记录方法论、架构和产品决策，以及支持或推翻它们的证据。
+> **文档分工**：`README.md` 是使用者入口；`docs/SKILL.md` 是 Agent 工作流；`.github/handoff/HANDOFF.md` 是当前状态、运行手册和任务 backlog；本文件回答“为什么这样做”。
+> **保留规则**：决策被推翻或关闭时不删除原记录，改为 `❌` 并补充推翻证据；新增或修改记录必须带日期和证据。
+
+## 决策索引
+
+| 分类 | 编号 | 含义 |
+|---|---|---|
+| 当前生效 | D1–D3、D6–D14 | 当前实现和验收必须遵守 |
+| 已否决/关闭 | D4–D5 | 保留作为反例，不得重新采用 |
+| 研究流程约束 | D8–D9 | 后续研究的验收和失效条件 |
+| 文档与工程治理 | D10–D11 | 数据链路和文档组织规则 |
+| 优化方向 | 文末清单 | 对应 HANDOFF §15，不等同于已批准实现 |
 
 **图例**：✅ 生效 | ⚠️ 有条件生效 | ❌ 已否决 / 关闭
+
+## 新增决策模板
+
+```markdown
+## DNN ✅/⚠️/❌ 标题（YYYY-MM-DD）
+
+- **背景**：要解决的问题和已知约束。
+- **决策**：选择了什么，以及明确不选择什么。
+- **证据**：报告、测试、实跑数字或复现命令。
+- **影响/边界**：适用范围、已知代价和失效条件。
+```
 
 ---
 
@@ -65,9 +94,9 @@
 
 ## D11 ✅ 文档体系收敛（2026-09-15）
 
-- `NEXT_STEPS.md` 内容并入 `HANDOFF.md`（§14 收尾修复 / §15 优化方向）后删除；
-- `ROADMAP.md` 并入 `HANDOFF.md` §16 研究档案后删除（2026-09-15）；
-- 新增本文件（DECISIONS.md）；四份文档分工见文首"定位"。
+- `NEXT_STEPS.md` 内容并入 `.github/handoff/HANDOFF.md`（§14 收尾修复 / §15 优化方向）后删除；
+- `ROADMAP.md` 并入 `.github/handoff/HANDOFF.md` §16 研究档案后删除（2026-09-15）；
+- 新增本文件（`.github/handoff/DECISIONS.md`）；四份文档分工见文首。
 
 ---
 
@@ -84,15 +113,7 @@
 
 - **A 股为何腾讯优先**：腾讯单票接口 0.1–0.2s 返回动态 P/E + P/B（stdlib、无需 key）；东财系在本机不可用（`stock_zh_a_spot_em()` 连 push2 35.5s 后 ConnectionError、`efinance.get_base_info()` JSONDecodeError），且全市场快照远贵于单票接口。
 - **港股为何 yfinance 优先**：腾讯港股行情只有动态 P/E、无 P/B（实测 0700.HK），yfinance 约 2s 给全 P/E + P/B。
-- **证据**：`tests/test_valuation_fallback.py` 24 项 + `tests/test_bar_partial.py` 22 项 + 全套 158 passed；patch `_fuyao_get` 强制 valuations 429 的端到端验证（A 股 PE/PB 齐全、`valuation_source=tencent`；港股禁用东财源后 P/B 由 yfinance 补）；2026-09-16 三次连续实跑 P/E、P/B 齐全（含 HK00700 实测腾讯给 P/E 15.89、yfinance 补 P/B 2.95，`valuation_source=yfinance`）。详见 HANDOFF §15.1。
-
----
-
-## D14 ✅ vol_ratio 盘中口径：全日等价折算 + `bar_partial` 标注（2026-09-16）
-
-- **背景**：O-2——盘中运行时当日 bar 未走完，`vol_ratio = 当日部分量 / 前 5 日全日均值` 被系统性低估（华能国际 14:24 → 0.60、苏泊尔上午 → 0.16），卡片无提示。
-- **决策**：`analyze_stock` 实盘路径按交易所时区计算已交易时段占比（A股 240min / 港股 330min / 美股 390min，zoneinfo 处理夏令时），当日量先折算成全日等价量再算 vol_ratio；JSON 输出 `bar_partial` / `session_elapsed_pct` / `vol_ratio_raw`，卡片 Volume 行加折算标注。**回测路径不变**（`compute_signal_from_ohlcv` 不传 frac，历史信号语义与研究数字零变化）。
-- **证据**：实跑 14:37（盘中）三市场标记正确——A股 elapsed 90.4%、港股 74.8%（各自时段公式吻合）；raw→adjusted 0.53→0.59 / 0.81→0.90 / 0.49→0.65；单测 22 项含"回测路径不变性"。详见 HANDOFF §15.3。**日期**：2026-09-16。
+- **证据**：`tests/test_valuation_fallback.py` 24 项 + `tests/test_bar_partial.py` 22 项 + 当时全套 158 passed；patch `_fuyao_get` 强制 valuations 429 的端到端验证（A 股 PE/PB 齐全、`valuation_source=tencent`；港股禁用东财源后 P/B 由 yfinance 补）；2026-09-16 三次连续实跑 P/E、P/B 齐全（含 HK00700 实测腾讯给 P/E 15.89、yfinance 补 P/B 2.95，`valuation_source=yfinance`）。详见 HANDOFF §15.1。
 
 ---
 
@@ -103,9 +124,15 @@
 - **口径证据**：与 THS 官方 qfq 序列交易日 120/120 对齐、历史 close 差 ≤1 分钱（双方舍入差）；`analyze_stock` 全字段扁平 diff 中信号级输出（phase / signal / combo_score）一致，vol_ratio 一致（volume 仅进比值，单位不变）。盘中 bar 的分钟级漂移属实时源固有，非源差异。港股端到端实测 **2 秒**（原 ~5 分钟）。
 - **边界**：腾讯美股 K 线仅 NASDAQ（.OQ）、usSPY 不可用（§6）→ 美股保持腾讯优先 + yfinance 兜底不变；p0 K 线缓存键 `_v2`→`_v3`，换源后 harness 整体重抓、不混用旧缓存，既有 `reports/*.json` 存档数字不变。详见 HANDOFF §15.2。**日期**：2026-09-16。
 
+## D14 ✅ vol_ratio 盘中口径：全日等价折算 + `bar_partial` 标注（2026-09-16）
+
+- **背景**：O-2——盘中运行时当日 bar 未走完，`vol_ratio = 当日部分量 / 前 5 日全日均值` 被系统性低估（华能国际 14:24 → 0.60、苏泊尔上午 → 0.16），卡片无提示。
+- **决策**：`analyze_stock` 实盘路径按交易所时区计算已交易时段占比（A股 240min / 港股 330min / 美股 390min，zoneinfo 处理夏令时），当日量先折算成全日等价量再算 vol_ratio；JSON 输出 `bar_partial` / `session_elapsed_pct` / `vol_ratio_raw`，卡片 Volume 行加折算标注。**回测路径不变**（`compute_signal_from_ohlcv` 不传 frac，历史信号语义与研究数字零变化）。
+- **证据**：实跑 14:37（盘中）三市场标记正确——A股 elapsed 90.4%、港股 74.8%（各自时段公式吻合）；raw→adjusted 0.53→0.59 / 0.81→0.90 / 0.49→0.65；单测 22 项含"回测路径不变性"。详见 HANDOFF §15.3。**日期**：2026-09-16。
+
 ---
 
-## 优化决策（2026-09-15 评审定稿，行动清单见 HANDOFF §15）
+## 研究与优化约束（2026-09-15 评审定稿，行动清单见 HANDOFF §15）
 
 - ✅ **采纳，立即做（P1，确定性缺口）**：估值字段兜底（O-1 已于 2026-09-16 完成 ✅）/ 盘中 bar 标记与 vol_ratio 口径（O-2 已于 2026-09-16 完成 ✅，见 D14）/ 实时名称回填 / 解禁替代源 / 卡片硬闸门行 / `daily_update.py` 日常自动化。
 - ⚠️ **有条件采纳（P2，走 D9 流程）**：mom_confirm 换裸 20 日动量或 OBV / 组件级概率校准驱动仓位 / downtrend 死分支放宽（研究）或删除（简化）/ 新闻事件分类与公司专属过滤 / 按 phase 差异化持有期。

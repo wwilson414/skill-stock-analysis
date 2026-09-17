@@ -49,7 +49,7 @@ def run_stock_combo(task):
     Row gains: combo, combo_phase, combo_gate, combo_blocked. Gate-blocked
     rows carry combo=None (excluded from the portfolio candidate set).
     """
-    entry, days, forward_days, bench_rows, use_cache, slip_bp = task
+    entry, days, forward_days, bench_rows, use_cache, slip_bp, mom_confirm_mode = task
     code, market = entry["code"], entry["market"]
     rec = {"code": code, "market": market}
     try:
@@ -69,7 +69,8 @@ def run_stock_combo(task):
         mom_by_date = {s["date"]: s.get("score_total")
                        for s in calib.get("signals", [])}
         mom_scores = [mom_by_date.get(b.get("date")) for b in ohlcv]
-        combo_series = combo_signal_series(ohlcv, mom_scores=mom_scores)
+        combo_series = combo_signal_series(
+            ohlcv, mom_scores=mom_scores, mom_confirm_mode=mom_confirm_mode)
         comp = p2.compute_components(ohlcv)
         date_idx = {b["date"]: i for i, b in enumerate(ohlcv)}
         is_a = market == "cn_a"
@@ -165,7 +166,8 @@ def _build_rows_combo(args):
         bench[m] = rows_b
         _log(f"[p4b] bench {m}: {len(rows_b)} bars")
     tasks = [(e, args.days, forward_days, bench[e["market"]],
-              not args.no_cache, args.slippage_bp) for e in entries]
+              not args.no_cache, args.slippage_bp, args.mom_confirm_mode)
+             for e in entries]
     recs = []
     if args.parallel > 1 and len(tasks) > 1:
         from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -242,6 +244,9 @@ def main():
     ap.add_argument("--bench-bars", type=int, default=1200)
     ap.add_argument("--forward-days", type=str, default="5,10,20")
     ap.add_argument("--slippage-bp", type=int, default=10)
+    ap.add_argument("--mom-confirm-mode", choices=["score", "chg20", "obv"],
+                    default="score",
+                    help="uptrend gate variant for O-7 research; score is production default")
     ap.add_argument("--parallel", type=int, default=6)
     ap.add_argument("--out", type=str, default="reports/p4_combo_backtest.json")
     ap.add_argument("--save-store", default=None,
@@ -255,6 +260,7 @@ def main():
     h = max(forward_days)
     out = {"horizon_main": f"{h}d", "max_positions": args.max_positions,
            "hold_days": args.hold, "slippage_bp": args.slippage_bp,
+           "mom_confirm_mode": args.mom_confirm_mode,
            "n_rows": len(rows), "n_stocks_ok": sum(1 for r in recs
                                                    if not r.get("error")),
            "n_stocks_skip": sum(1 for r in recs if r.get("error"))}

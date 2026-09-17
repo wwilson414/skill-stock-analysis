@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "task-state.schema.json",
+  "title": "MC2 Task State",
+  "description": "Machine-readable scheduler state for the MC2 workflow.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "current_milestone",
+    "current_task",
+    "status",
+    "session_history"
+  ],
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0.0" },
+    "current_milestone": {
+      "type": "string",
+      "pattern": "^M[0-9]+$"
+    },
+    "current_task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "status",
+        "agent",
+        "retry_count",
+        "max_retries",
+        "depends_on"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/taskId"
+        },
+        "status": {
+          "$ref": "#/$defs/status",
+          "description": "Lifecycle status of the single active task."
+        },
+        "agent": {
+          "type": "string",
+          "enum": [
+            "coder",
+            "decomposer",
+            "orchestrator",
+            "planner",
+            "reviewer",
+            "robustness-expert",
+            "security",
+            "tester"
+          ]
+        },
+        "retry_count": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "max_retries": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "depends_on": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/taskId"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "status": {
+      "$ref": "#/$defs/status",
+      "description": "Global workflow status. Set to 'blocked' only when escalated to Human via circuit breaker."
+    },
+    "retry_count": {
+      "$ref": "#/$defs/nonNegativeInteger",
+      "description": "Global retry counter retained for compatibility with older scheduler state."
+    },
+    "session_history": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "timestamp",
+          "session",
+          "action",
+          "next"
+        ],
+        "properties": {
+          "timestamp": {
+            "type": "string",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}$"
+          },
+          "session": {
+            "type": "string",
+            "minLength": 1
+          },
+          "action": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "next": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          }
+        }
+      }
+    },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "is_worktree": { "type": "boolean" },
+        "worktree_path": { "type": "string" },
+        "branch_name": { "type": "string" },
+        "git_common_dir": { "type": "string" },
+        "git_dir": { "type": "string" },
+        "remote_configured": { "type": "boolean" },
+        "task_id_prefix": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+        }
+      },
+      "description": "Execution environment metadata for Agents-window and git worktree sessions."
+    },
+    "archive": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "progress_archive": { "type": "string" },
+        "tasks_archive": { "type": "string" }
+      },
+      "description": "Relative paths to the most recent archive files, for cold lookup only."
+    }
+  },
+  "$defs": {
+    "taskId": {
+      "type": "string",
+      "pattern": "^(?:T[0-9]+(?:\\.[0-9]+)*|TASK-[A-Za-z0-9][A-Za-z0-9_-]*-[0-9]+)$"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "in-progress",
+        "review",
+        "done",
+        "blocked"
+      ]
+    },
+    "nonNegativeInteger": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

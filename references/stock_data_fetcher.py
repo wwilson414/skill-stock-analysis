@@ -2102,7 +2102,7 @@ def calc_tradability(realtime: dict, code: str, name: str = "") -> dict:
 
 
 def fetch_upcoming_unlocks(code: str, within_days: int = 60) -> list:
-    """A-share lock-up unlock upcoming events via akshare (best-effort, non-fatal).
+    """A-share lock-up unlock upcoming events via multiple akshare sources.
 
     Returns list of {"date": "YYYY-MM-DD", "pct_of_float": float|None, "detail": str}
     sorted by date, only events within [today, today+within_days]. [] on any failure.
@@ -2113,7 +2113,7 @@ def fetch_upcoming_unlocks(code: str, within_days: int = 60) -> list:
     today = datetime.now().date()
     horizon = today + timedelta(days=within_days)
 
-    for fn_name in ("stock_restricted_release_stockholder_em",
+    for fn_name in ("stock_restricted_release_queue_em",
                     "stock_restricted_release_queue_sina"):
         fn = getattr(ak, fn_name, None)
         if fn is None:
@@ -2126,11 +2126,24 @@ def fetch_upcoming_unlocks(code: str, within_days: int = 60) -> list:
             continue
         out = []
         try:
-            date_col = next((c for c in df.columns
-                             if "date" in str(c) or "time" in str(c)), None)
-            ratio_col = next((c for c in df.columns
-                              if "ratio" in str(c) or "%" in str(c)), None)
-            qty_col = next((c for c in df.columns if "quantity" in str(c)), None)
+            columns = list(df.columns)
+            date_col = next((c for c in columns if str(c) in
+                             ("解禁时间", "解禁日期", "FREE_DATE")), None)
+            if date_col is None:
+                date_col = next((c for c in columns
+                                 if any(k in str(c).lower() for k in
+                                        ("date", "time", "日期", "时间"))), None)
+            ratio_col = next((c for c in columns if str(c) in
+                              ("占流通市值比例", "FREE_RATIO", "free_ratio")), None)
+            if ratio_col is None:
+                ratio_col = next((c for c in columns
+                                  if "ratio" in str(c).lower() or "比例" in str(c)), None)
+            qty_col = next((c for c in columns if str(c) in
+                            ("解禁数量", "实际解禁数量", "ABLE_FREE_SHARES",
+                             "CURRENT_FREE_SHARES")), None)
+            if qty_col is None:
+                qty_col = next((c for c in columns
+                                if "quantity" in str(c).lower() or "数量" in str(c)), None)
             if date_col is None:
                 continue
             for _, r in df.iterrows():
@@ -2142,18 +2155,22 @@ def fetch_upcoming_unlocks(code: str, within_days: int = 60) -> list:
                     continue
                 pct = None
                 if ratio_col is not None:
-                    v = _safe_float(r.get(ratio_col))
+                    raw_pct = r.get(ratio_col)
+                    if isinstance(raw_pct, str):
+                        raw_pct = raw_pct.strip().rstrip("%")
+                    v = _safe_float(raw_pct)
                     if v is not None and 0 < v <= 100:
                         pct = v
                 out.append({"date": d, "pct_of_float": pct,
-                            "detail": str(r.get(qty_col)) if qty_col is not None else ""})
+                            "detail": str(r.get(qty_col)) if qty_col is not None else "",
+                            "source": f"akshare/{fn_name}"})
         except Exception:
             continue
         if out:
             out.sort(key=lambda x: x["date"])
             _log(f"[{code}] unlocks via akshare/{fn_name}: {len(out)} within {within_days}d")
             return out
-    _log(f"[{code}] no upcoming unlock data (akshare endpoints unavailable)")
+    _log(f"[{code}] no upcoming unlock data (akshare endpoints unavailable or empty)")
     return []
 
 
@@ -2802,6 +2819,7 @@ def analyze_stock(code: str, days: int = 120, fetch_news: bool = False) -> dict:
     for u in unlocks:
         if today_str <= u["date"] <= horizon30 and u.get("pct_of_float") is not None:
             unlock_pct_30d = max(unlock_pct_30d or 0.0, u["pct_of_float"])
+    unlock_gate_status = "active" if unlock_pct_30d is not None else "not_enabled"
     # Relative strength vs market benchmark (non-fatal if benchmark unavailable)
     try:
         bench = _benchmark_closes(market)
@@ -2814,6 +2832,7 @@ def analyze_stock(code: str, days: int = 120, fetch_news: bool = False) -> dict:
     context["rr_ratio"] = risk.get("rr_ratio")
     context["limit_status"] = tradability.get("limit_status")
     context["unlock_pct_30d"] = unlock_pct_30d
+    context["unlock_gate_status"] = unlock_gate_status
     score = calc_trend_score(ma, macd, rsi, vol, bias, support, context)
 
     # P4-2: phase-aware combo signal — switches primary driver by market phase
@@ -2866,7 +2885,8 @@ def analyze_stock(code: str, days: int = 120, fetch_news: bool = False) -> dict:
             "relative_strength": rs,
             "tradability": tradability,
         },
-        "events": {"upcoming_unlocks": unlocks, "unlock_pct_30d": unlock_pct_30d},
+        "events": {"upcoming_unlocks": unlocks, "unlock_pct_30d": unlock_pct_30d,
+                "unlock_gate_status": unlock_gate_status},
         "trend_score": score,
         "combo": combo,
         "recent_bars": valid_bars[-10:],  # same sequence as indicators input, dates strictly aligned

@@ -129,6 +129,7 @@ follow-up questions about any of them and the agent will explain the inputs.
 | Explain a verdict | `Why is the score 62?` / `What would change the signal to Buy and what would keep it at Wait?` |
 | Validate it on your market | `python3 references/stock_data_fetcher.py --stocks "600519" --backtest --calibrate` prints per-phase ICs; the full evidence run is `python3 references/p0_backtest.py` → `reports/p0_expansion.json` (see [Validation & Production Toolchain](#validation--production-toolchain-p0p4)) |
 | Paper-trade the signals | `p4_combo_backtest.py --save-store reports/signals.db` then `paper_trader.py --db reports/signals.db --start 2025-09-01` (see [daily operation](#optional-daily-operation)) |
+| Calibrate component probabilities | `python3 references/component_calibration.py --universe fixed` (research only; compare with random holdout before any sizing change) |
 
 Want to go deeper? [Scoring System](#scoring-system) explains the 100 points,
 [Market Phase Classification](#market-phase-classification) and
@@ -153,7 +154,7 @@ Want to go deeper? [Scoring System](#scoring-system) explains the 100 points,
 Verify the installation (only the last command needs network):
 
 ```bash
-python3 -m pytest tests/ -q                                     # 158 passed, fully offline, ~0.5s
+python3 -m pytest tests/ -q                                     # 171 passed, fully offline, ~0.5s
 python3 references/score_config.py | head -3                     # prints the threshold registry
 python3 references/stock_data_fetcher.py --stocks "600519" --days 30 > /tmp/smoke.json
 python3 -c "import json;d=json.load(open('/tmp/smoke.json'));print(d['total_success'], d['stocks'][0]['trend_score']['signal'], d['stocks'][0]['combo']['phase'])"
@@ -184,7 +185,7 @@ Check the technicals for PLTR and RKLB
 ```
 
 Separate tickers with commas, spaces or newlines, and mix markets freely
-(`/stock-analysis 600519,HK00700,TSLA`). The agent then follows [SKILL.md](SKILL.md) STEP 1–5:
+(`/stock-analysis 600519,HK00700,TSLA`). The agent then follows [docs/SKILL.md](docs/SKILL.md) STEP 1–5:
 normalize tickers → run the Python script → search news → analyze → print the decision dashboard.
 
 Batch behaviour: one request can carry any number of tickers; the agent prints one dashboard per
@@ -203,7 +204,7 @@ Accepted inputs:
 Credentials in the agent: if your client does not inherit user-level environment variables, the
 agent copies the key from the configured credential source into the client's Secret/env store, so
 you never re-supply it per request. When a `hithink-finance-*` MCP server is configured, the agent
-may additionally use those MCP tools for enhanced THS data (SKILL.md STEP 2.5) — optional.
+may additionally use those MCP tools for enhanced THS data (docs/SKILL.md STEP 2.5) — optional.
 
 #### Direct CLI (`stock_data_fetcher.py`)
 
@@ -279,7 +280,7 @@ Each `stocks[]` entry:
 | `indicators.risk` | `atr`, `atr_pct`, `ann_vol_pct`, `stop_structural`, `stop_suggested`, `target_suggested`, `rr_ratio` |
 | `indicators.relative_strength` | `benchmark`, `stock_ret_20d` / `stock_ret_60d`, `bench_ret_20d` / `bench_ret_60d`, `rs_20d`, `rs_60d` |
 | `indicators.tradability` | `limit_status`, `limit_threshold_pct`, `change_pct` |
-| `events` | `upcoming_unlocks`, `unlock_pct_30d` (A-share float unlocks) |
+| `events` | `upcoming_unlocks`, `unlock_pct_30d`, `unlock_gate_status` (`active` / `not_enabled`) (A-share float unlocks) |
 | `trend_score` | `total`, `breakdown` (7 components), `signal` / `signal_cn`, `buy_gates[]`, `warnings[]` |
 | `combo` | Phase-aware combo: `phase`, `primary`, `primary_score`, `weight`, `secondary`, `secondary_score`, `gates[]`, `gate_results`, `gate_blocked`, `combo_score`, `context`. `null` when the helper modules are missing or the bar is still in warmup |
 | `recent_bars` / `as_of` / `total_bars` | Last 10 bars (dates aligned to the indicator input), indicator cutoff date, bars fetched |
@@ -322,8 +323,9 @@ Per script:
 | `references/p1_eval.py` | `--bootstrap 1000` | `reports/p1_signal_results.json` |
 | `references/p2_execution.py` | `--bootstrap 1000`, `--slippage-bp 10.0` | `reports/p2_execution.json` |
 | `references/p2_schedule.py` | `--max-positions 5`, `--hold 20`, `--slippage-bp 10` | `reports/p2_schedule.json` |
-| `references/p4_combo_backtest.py` | `--max-positions 5`, `--hold 20`, `--save-store <db>` | `reports/p4_combo_backtest.json` (+ SQLite) |
+| `references/p4_combo_backtest.py` | `--max-positions 5`, `--hold 20`, `--mom-confirm-mode score|chg20|obv`, `--save-store <db>` | `reports/p4_combo_backtest.json` (+ SQLite) |
 | `references/paper_trader.py` | `--db reports/signals.db`, `--start`, `--end`, `--max-positions 5`, `--hold 20`, `--slippage-bp 10.0`, `--stop-loss-pct`, `--min-signal 0`, `--days 900`, `--out`, `--persist`, `--no-cache`, `--demo` | `reports/p4_paper_trader.json` |
+| `references/daily_update.py` | `--db`, `--signals-only`, `--replay-only`, `--start`, `--end`, `--codes`, `--days`, `--parallel`, `--no-cache` | refreshes the store and replay report |
 | `references/store.py` | `--db reports/signals.db`, `--demo` (scratch DB in `/tmp`) | SQLite (`signals` / `trades` / `portfolio`) |
 | `references/score_calibration.py` | `--signals <raw dump>`, `--out`, `--horizon 20`, `--train-frac 0.7`, `--bin-w 5.0` | `reports/calibration_20d.json` |
 | `references/score_config.py` | none — dumps the threshold registry as JSON | stdout |
@@ -410,7 +412,7 @@ Risk gates (defaults from `score_config.RISK`, applied inside the replay when ri
 #### Tests
 
 ```bash
-python3 -m pytest tests/ -q                        # 158 passed, fully offline, ~0.5s
+python3 -m pytest tests/ -q                        # 171 passed, fully offline, ~0.5s
 python3 -m pytest tests/test_paper_trader.py -q    # one suite
 python3 -m pytest tests/ -q -k combo               # only tests matching "combo"
 ```
@@ -436,6 +438,19 @@ Per-suite breakdown: see [Testing](#testing) below.
 | Pytest "module not found" | Run pytest from the repo root (or set `SDF_REFERENCES_DIR`), so `references/` resolves |
 
 #### Optional: daily operation
+
+The complete pipeline can be run with one command. It refreshes the idempotent
+signal store, then replays the configured out-of-sample window and persists
+trades and portfolio snapshots:
+
+```bash
+python3 references/daily_update.py --start 2025-09-01
+```
+
+For scheduling, copy [cron/daily_update.cron.example](cron/daily_update.cron.example)
+and replace `REPO` with the absolute repository path. It runs the refresh on
+weekdays after close and the replay on Saturday morning. Use `--signals-only`
+or `--replay-only` to run either stage manually.
 
 ```bash
 # 1) refresh the signal history in batch (idempotent — safe to rerun)
@@ -468,6 +483,29 @@ PY
 # 3) rolling out-of-sample check, persisting trades + portfolio snapshots
 python3 references/paper_trader.py --db reports/signals.db --start 2025-09-01 --persist
 ```
+
+#### O-8 component calibration (research only)
+
+`component_calibration.py` fits train-only isotonic mappings for `comp_vol`,
+`mr_score`, the flat `score_total`, and unblocked `combo_score`, then evaluates
+each mapping on the later time segment against a constant-rate Brier baseline.
+Blocked combo bars are excluded from the combo fit and their coverage is
+reported. The result is diagnostic only: it does not alter combo scores,
+position sizing, or the paper-trader defaults.
+
+```bash
+python3 references/component_calibration.py --universe fixed \
+   --out reports/o8_component_calibration_fixed.json
+python3 references/component_calibration.py --universe random --seed 42 \
+   --pool-size 300 --sample-n 30 \
+   --out reports/o8_component_calibration_random.json
+```
+
+The 2026-09-17 run did not clear the acceptance gate consistently: all four
+features missed the baseline on the fixed pool; on the random holdout only
+`mr_score` and `combo_score` passed, with combo improvement of `0.00015`.
+No probability-to-position-size change is adopted. Any future adoption must
+repeat the fixed/random comparison and pass the OOT Brier gate on both.
 
 Schedule these with cron/systemd for a continuously updated paper account. Only the first run for a
 given code + window needs network; `.p0_cache/` keeps later runs offline. **Re-run the out-of-sample
@@ -705,7 +743,7 @@ HK/US:   Tavily -> SerpAPI (Google News) -> Claude WebSearch
 ## Validation & Production Toolchain (P0–P4)
 
 The scoring/combo system is not guesswork — it was built through four evidence-gated phases
-(evidence archive: [HANDOFF.md](HANDOFF.md) §16; decision log: [DECISIONS.md](DECISIONS.md)):
+(evidence archive: [.github/handoff/HANDOFF.md](.github/handoff/HANDOFF.md) §16; decision log: [.github/handoff/DECISIONS.md](.github/handoff/DECISIONS.md)):
 
 | Phase | Question | Headline result |
 | ----- | -------- | --------------- |
@@ -754,10 +792,13 @@ RiskMonitor (on by default) -> entry gates 20%/stock + 60%/phase,
 
 ```text
 stock-analysis/
-+-- SKILL.md                           # Skill entry point (agent workflow STEP 1-5)
++-- docs/
+|   +-- SKILL.md                       # Skill entry point (agent workflow STEP 1-5)
+|   +-- requirement.md                 # Product requirements baseline
 +-- README.md                          # This file
-+-- HANDOFF.md                         # Session handoff: state, evidence, runbooks
-+-- DECISIONS.md                      # Decision log (adopted / rejected, with evidence)
++-- .github/handoff/
+|   +-- HANDOFF.md                    # Session handoff: state, evidence, runbooks
+|   +-- DECISIONS.md                  # Decision log (adopted / rejected, with evidence)
 +-- references/
 |   +-- stock_data_fetcher.py          # Core: analyze_stock() / backtest_stock() / calc_trend_score()
 |   +-- signal_combo.py                # P4-1: phase-aware combo signal
@@ -781,7 +822,7 @@ stock-analysis/
 ## Testing
 
 ```bash
-python3 -m pytest tests/ -q      # 158 passed, fully offline (~0.5s)
+python3 -m pytest tests/ -q      # 171 passed, fully offline (~0.5s)
 ```
 
 | Suite | Cases | Covers |
@@ -803,9 +844,9 @@ python3 -m pytest tests/ -q      # 158 passed, fully offline (~0.5s)
 
 | Document | Audience | Contents |
 | -------- | -------- | -------- |
-| `SKILL.md` | Agent | Trigger definition, STEP 1-5 workflow, hard rules, offline toolchain appendix |
-| `HANDOFF.md` | Maintainer / next session | Current state, core numbers, file map, rerun commands, runbook, optimizations (§15), research archive (§16) |
-| `DECISIONS.md` | Maintainer | Decision log: adopted / rejected decisions with evidence and dates |
+| `docs/SKILL.md` | Agent | Trigger definition, STEP 1-5 workflow, hard rules, offline toolchain appendix |
+| `.github/handoff/HANDOFF.md` | Maintainer / next session | Current state, core numbers, file map, rerun commands, runbook, optimizations (§15), research archive (§16) |
+| `.github/handoff/DECISIONS.md` | Maintainer | Decision log: adopted / rejected decisions with evidence and dates |
 
 ## Inspiration
 
@@ -814,7 +855,7 @@ This project's core analysis logic references the [daily_stock_analysis](https:/
 - **Removed external LLM dependency** - Original project used LiteLLM to call Gemini/OpenAI; this Skill uses Claude directly for analysis
 - **Packaged as Claude Code Skill** - One command to invoke
 - **Graceful degradation data sources** - Retains Tushare/Tavily and other quality data sources; auto-degrades to free sources when no API key is available
-- **Streamlined runtime** - The per-request path is still tiny (`SKILL.md` + `stock_data_fetcher.py` + two templates); the P0–P4 research, persistence and replay toolchain lives beside it in `references/` and runs only offline
+- **Streamlined runtime** - The per-request path is still tiny (`docs/SKILL.md` + `stock_data_fetcher.py` + two templates); the P0–P4 research, persistence and replay toolchain lives beside it in `references/` and runs only offline
 
 ## License
 

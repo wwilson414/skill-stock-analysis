@@ -1,0 +1,30 @@
+{
+  "experiment": "O-7 mom_confirm gate A/B",
+  "date": "2026-09-16",
+  "production_mode": "score",
+  "variants": ["score", "chg20", "obv"],
+  "fixed_universe": {
+    "n_rows": 20769,
+    "combo_net": {
+      "score": {"n": 211, "sharpe": 0.040, "annual_ret": 9.96, "max_dd": 0.8252, "hit_rate": 52.6},
+      "chg20": {"n": 211, "sharpe": 0.073, "annual_ret": 16.41, "max_dd": 0.8674, "hit_rate": 52.6},
+      "obv": {"n": 209, "sharpe": 0.032, "annual_ret": 8.40, "max_dd": 0.9116, "hit_rate": 52.2}
+    }
+  },
+  "random_holdout": {
+    "seed": 42,
+    "pool_size": 300,
+    "sample_n": 30,
+    "n_rows": 16275,
+    "combo_net": {
+      "score": {"n": 132, "sharpe": 0.118, "annual_ret": 28.94, "max_dd": 0.8478, "hit_rate": 51.5},
+      "chg20": {"n": 132, "sharpe": 0.099, "annual_ret": 24.84, "max_dd": 0.8447, "hit_rate": 50.8},
+      "obv": {"n": 122, "sharpe": 0.075, "annual_ret": 22.74, "max_dd": 0.9230, "hit_rate": 50.0}
+    }
+  },
+  "verdict": {
+    "adopt_default": false,
+    "reason": "Both research gates reduce random-holdout net Sharpe versus the production score gate; OBV also reduces coverage and increases drawdown.",
+    "next_action": "Keep score as the production default. Retain chg20 and obv as explicit research-only modes; rerun OOS validation before any future change."
+  }
+}

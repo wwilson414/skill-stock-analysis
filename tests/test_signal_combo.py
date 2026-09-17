@@ -51,6 +51,26 @@ def test_combo_uptrend_primary_and_momentum_gate():
     assert low["combo_score"] is None
 
 
+def test_combo_uptrend_research_gate_modes_ignore_total_score():
+    n = len(UP_OHLCV)
+    low_mom = [40.0] * n
+
+    chg = compute_combo_signal(UP_OHLCV, mom_scores=low_mom,
+                               mom_confirm_mode="chg20")
+    obv = compute_combo_signal(UP_OHLCV, mom_scores=low_mom,
+                               mom_confirm_mode="obv")
+
+    assert chg["gate_blocked"] is False
+    assert obv["gate_blocked"] is False
+
+
+def test_combo_default_gate_remains_score_based():
+    out = compute_combo_signal(UP_OHLCV, mom_scores=[40.0] * len(UP_OHLCV))
+
+    assert out["gate_results"]["momentum_confirm"] is False
+    assert out["gate_blocked"] is True
+
+
 def test_combo_range_swing_half_weight():
     out = compute_combo_signal(RG_OHLCV)
     assert out["phase"] == "range_swing"
