@@ -303,6 +303,16 @@ The script handles:
 - Technical indicators
 - Technical scores
 - Phase-aware combo signals
+- Fundamentals (N-04): run with `--fundamentals` to attach the annual-report
+  envelope + five-dimension quality grades (`profitability`, `growth`,
+  `cash_flow_quality`, `financial_safety`, `competitive_position`). The
+  fetch envelope never invents values: every missing metric is explained in
+  `missing`, sources degrade to status `insufficient` instead of raising,
+  and `currency` names the reporting currency (CNY/HKD/USD). A long-term
+  `BUY_CANDIDATE` requires fundamental evidence: without it (or with
+  `overall: insufficient`) the decision layer demotes to `WATCHLIST` and
+  lowers confidence. `competitive_position` stays `insufficient` until the
+  N-07 peer layer lands.
 
 MCP or additional data tools may be used for:
 

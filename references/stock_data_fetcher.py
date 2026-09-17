@@ -3056,7 +3056,29 @@ def _re_evaluation_triggers(state: str, indicators: dict) -> list:
     return out
 
 
-def _decision_confidence(state: str, data_quality: dict, score: dict, combo) -> str:
+def _fundamentals_gate(fundamentals, horizon: str) -> str | None:
+    """N-04 acceptance: a long-term BUY_CANDIDATE requires fundamental evidence.
+
+    *fundamentals* is the analyze_stock `fundamentals` payload
+    ({data, analysis}) or None. Returns the gate text to show, or None when
+    no gate applies. Technical-horizon decisions are untouched — they must
+    keep working with fundamentals absent (it is still only decision-support
+    for trading, not a long-term conclusion).
+    """
+    long_term = bool(horizon) and "long" in str(horizon).lower()
+    if long_term:
+        if not fundamentals:
+            return ("fundamentals: not fetched — a long-term BUY_CANDIDATE "
+                    "requires fundamental evidence")
+        analysis = fundamentals.get("analysis") or {}
+        if analysis.get("overall") == "insufficient":
+            return ("fundamentals: insufficient data — a long-term "
+                    "BUY_CANDIDATE requires fundamental evidence")
+    return None
+
+
+def _decision_confidence(state: str, data_quality: dict, score: dict, combo,
+                         fundamentals: dict = None) -> str:
     """Confidence in *the decision*, lowered by weak data and mixed signals."""
     if data_quality.get("level") == "insufficient":
         return "insufficient_data"
@@ -3072,6 +3094,10 @@ def _decision_confidence(state: str, data_quality: dict, score: dict, combo) -> 
     elif combo.get("combo_score") is not None and total is not None \
             and combo["combo_score"] * (total - 50) < 0:
         rank -= 1                        # combo and score disagree
+    fund_impact = ((fundamentals or {}).get("analysis") or {}).get(
+        "confidence_impact")
+    if fund_impact in ("moderate", "major"):
+        rank -= 1                        # no/weak fundamental evidence
     return {3: "high", 2: "medium", 1: "low"}.get(max(1, rank), "low")
 
 
@@ -3094,12 +3120,15 @@ def _position_cap(weight, max_positions: int = DEFAULT_MAX_POSITIONS):
 
 def build_decision(market: str, score: dict, combo, indicators: dict,
                    data_quality: dict, market_rules_obj: dict = None,
-                   horizon: str = None) -> dict:
+                   horizon: str = None, fundamentals: dict = None) -> dict:
     """Map technical evidence to a decision-support state (N-02).
 
     Only demotes: a buy-grade setup needs the score, the combo signal *and*
     clear hard gates. Every state carries supporting/opposing evidence, key
-    risks, a re-evaluation trigger list and the fixed disclaimer.
+    risks, a re-evaluation trigger list and the fixed disclaimer. N-04:
+    when *fundamentals* is supplied its quality grades affect confidence;
+    a long-term horizon with no fundamental evidence can never reach
+    BUY_CANDIDATE.
     """
     market_rules_obj = market_rules_obj or market_rules(market)
     horizon = horizon or DEFAULT_TECHNICAL_HORIZON
@@ -3152,22 +3181,37 @@ def build_decision(market: str, score: dict, combo, indicators: dict,
     if state == "AVOID" and total is not None and total < 30 and bearish:
         state = "STRONG_AVOID"
 
+    # N-04: long-term BUY_CANDIDATE needs fundamental evidence — demote only
+    # the candidate state; every other state already errs conservative.
+    fund_gate = _fundamentals_gate(fundamentals, horizon)
+    if fund_gate and state == "BUY_CANDIDATE":
+        state = "WATCHLIST"
+
     if state not in DECISION_STATES:  # defensive: never emit an unknown state
         state = "RECHECK_REQUIRED"
 
     return _decision_payload(market, state, horizon, score, combo, indicators,
-                             data_quality, market_rules_obj, gates)
+                             data_quality, market_rules_obj, gates,
+                             fundamentals)
 
 
 def _decision_payload(market, state, horizon, score, combo, indicators,
-                      data_quality, market_rules_obj, gates) -> dict:
+                      data_quality, market_rules_obj, gates,
+                      fundamentals=None) -> dict:
     """Assemble the decision object (kept separate for readability)."""
     risk = indicators.get("risk") or {}
-    confidence = _decision_confidence(state, data_quality, score, combo)
+    confidence = _decision_confidence(state, data_quality, score, combo,
+                                      fundamentals)
     warning = None
     if data_quality.get("confidence_impact") in ("moderate", "major"):
         warning = ("data quality " + data_quality["level"] + ": "
                    + "; ".join(data_quality.get("caveats") or []))
+    fund_impact = ((fundamentals or {}).get("analysis") or {}).get(
+        "confidence_impact")
+    if fund_impact == "major":
+        warning = (warning + "; " if warning else "")
+        warning += ("fundamentals unavailable: long-term conclusions are not "
+                    "supported")
 
     position_size = None
     if state in ("BUY_CANDIDATE", "SMALL_POSITION_ONLY"):
@@ -3459,7 +3503,8 @@ def _unified_realtime_name(name, code, display, market):
     return n or disp_s or code_s
 
 
-def analyze_stock(code: str, days: int = 120, fetch_news: bool = False) -> dict:
+def analyze_stock(code: str, days: int = 120, fetch_news: bool = False,
+                  fetch_fundamentals: bool = False) -> dict:
     """Full analysis pipeline for a single stock."""
     market, normalized, display = classify_stock(code)
 
@@ -3597,6 +3642,26 @@ def analyze_stock(code: str, days: int = 120, fetch_news: bool = False) -> dict:
         news = search_news(stock_name, display, market=market)
         news_summary = analyze_news_sentiment(news)
 
+    # N-04: fundamentals layer — non-fatal, off by default (adds network
+    # calls; callers that need long-term evidence pass fundamentals=True).
+    fundamentals = None
+    if fetch_fundamentals:
+        try:
+            try:
+                from fundamentals import fetch_fundamentals as _ff, \
+                    analyze_fundamentals as _fa
+            except ImportError:
+                if not _ensure_reference_modules():
+                    raise
+                from fundamentals import fetch_fundamentals as _ff, \
+                    analyze_fundamentals as _fa
+            fdata = _ff(market, normalized)
+            fundamentals = {"data": fdata,
+                            "analysis": _fa(fdata) if fdata else None}
+        except Exception as e:
+            _log(f"[{code}] fundamentals skipped: {e}")
+            fundamentals = None
+
     result = {
         "code": display,
         "market": market,
@@ -3621,6 +3686,7 @@ def analyze_stock(code: str, days: int = 120, fetch_news: bool = False) -> dict:
                 "unlock_gate_status": unlock_gate_status},
         "trend_score": score,
         "combo": combo,
+        "fundamentals": fundamentals,
         "recent_bars": valid_bars[-10:],  # same sequence as indicators input, dates strictly aligned
         "as_of": valid_bars[-1].get("date"),  # Indicator calculation cutoff date
         "adjustment": raw.get("adjustment", "unknown"),
@@ -3636,7 +3702,8 @@ def analyze_stock(code: str, days: int = 120, fetch_news: bool = False) -> dict:
     decision_view["risk"] = risk
     result["decision"] = build_decision(
         market, score, combo, decision_view, result["data_quality"],
-        market_rules_obj=result["market_rules"])
+        market_rules_obj=result["market_rules"],
+        fundamentals=fundamentals)
     if news:
         result["news"] = news
     if news_summary is not None:
@@ -4299,6 +4366,7 @@ def main():
     parser.add_argument("--stocks", required=True, help="Comma-separated stock codes")
     parser.add_argument("--days", type=int, default=120, help="History trading days")
     parser.add_argument("--news", action="store_true", help="Also search news (A-share via akshare/East Money free; HK/US needs TAVILY_API_KEY or SERPAPI_KEY)")
+    parser.add_argument("--fundamentals", action="store_true", help="Also fetch fundamentals (annual report metrics + 5-dimension quality grades; adds network calls)")
     parser.add_argument("--backtest", action="store_true", help="Run backtest calibration (walks through historical data, generates signals, tracks forward returns)")
     parser.add_argument("--backtest-days", type=int, default=252, help="Backtest lookback window in trading days (default 252)")
     parser.add_argument("--forward-days", type=str, default="5,10,20", help="Forward return horizons in trading days (comma-separated)")
@@ -4390,7 +4458,8 @@ def main():
 
     for code in codes:
         try:
-            result = analyze_stock(code, args.days, fetch_news=args.news)
+            result = analyze_stock(code, args.days, fetch_news=args.news,
+                                   fetch_fundamentals=args.fundamentals)
             results.append(result)
         except Exception as e:
             errors.append(error_payload(code, e))

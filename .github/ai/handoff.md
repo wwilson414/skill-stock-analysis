@@ -777,6 +777,23 @@ uptrend comp_vol net +0.051 / range comp_vol net +0.043。
 
 #### N-04 实现基本面数据层与基本面分析
 
+> **状态（2026-09-17 更新）：已实现并验证。** `references/fundamentals.py` 提供
+> `fetch_fundamentals(market, code)`（统一 envelope：market/code/currency/source/
+> fetched_at/period_type/report_period/metrics(15 keys)/missing(逐项原因)/status
+> ok|partial|insufficient，来源链 akshare→yfinance（cn_a）、yfinance（HK/US），
+> 全部失败时 status=insufficient 且不抛错、不猜测值）与
+> `analyze_fundamentals()`（五维度 profitability/growth/cash_flow_quality/
+> financial_safety/competitive_position，等级 strong/ok/weak/insufficient，
+> 输出 overall + confidence_impact none|minor|major + warnings）。
+> `analyze_stock(..., fetch_fundamentals=True)` 与 CLI `--fundamentals` 挂接
+> （默认关闭，非致命）。决策层：`build_decision(..., fundamentals=...)` —
+> 长期视角无基本面证据时 BUY_CANDIDATE 降级为 WATCHLIST；confidence_impact
+> 为 major 时 confidence 降一档并追加 warning。`competitive_position` 待 N-07
+> 同业数据落地。测试：`tests/test_fundamentals.py`（25 用例，无网络依赖）。
+> 端到端冒烟：600519 `--fundamentals` → akshare 来源 6 项指标 + analysis
+> strong/minor + 决策集成正常。剩余增强（非验收阻塞）：TTM 口径、股息率
+> （akshare 端点）、ROIC、行业/同业入口（N-07）。
+
 - **差异**：当前没有财报/基本面分析函数或字段，仅有少量行情估值补充，未覆盖收入/利润增长、毛利率、净利率、ROE/ROIC、经营现金流、自由现金流、现金转换、负债/有息债、流动性、股息、行业/同业和竞争地位。
 - **范围**：建立市场差异可容纳的财报 schema，记录报告期、币种、来源、单位、TTM/年度口径和缺失原因；实现基础质量维度（profitability、growth、cash flow quality、financial safety、competitive position）及同业比较入口；数据不可用时返回缺失状态并降低置信度，不填充猜测值。
 - **验收**：A/H/US 至少能解析可获得的共同指标；字段缺失可逐项表达；基本面分析可独立于技术分析运行；没有基本面证据时不能生成长期 `BUY_CANDIDATE`。

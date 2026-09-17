@@ -67,6 +67,18 @@ For each stock, output one card separated by `---`:
 
 > `combo_score` 为空（gate blocked / 数据不足）时输出 `N/A`——该 bar 不作为组合候选；不要用动量总分替代排名。
 
+**Fundamentals (N-04, only when `fundamentals` is non-null)**
+- Source: {fund_source} | Period: {fund_period} ({fund_period_type}) | Currency: {fund_currency} | Status: {fund_status}
+- Quality: profitability {fund_profitability} | growth {fund_growth} | cash flow {fund_cash_flow} | financial safety {fund_financial_safety} | competitive position {fund_competitive_position}
+- Overall: {fund_overall} (confidence impact: {fund_confidence_impact})
+
+> Render each dimension level from `fundamentals.analysis.dimensions.<name>.level`
+> (`strong`/`ok`/`weak`/`insufficient`) and cite its evidence strings. If
+> `fundamentals` is null or `overall` is `insufficient`, render "基本面数据不可用"
+> and the `confidence_impact` stays `major` — long-term BUY conclusions are then
+> forbidden. Never fill missing metrics from memory: gaps are listed in
+> `fundamentals.data.missing` with reasons.
+
 **Technical Analysis**
 - Phase/Position: {phase_en} | 120-day range position {range_pos_pct}% | Distance from MA60 {dist_ma60_pct:+.2f}% | 20-day change {chg_20d_pct:+.2f}%
 - Relative Strength: vs {bench_en} 20D RS {rs_20d:+.2f}% | 60D RS {rs_60d:+.2f}%

@@ -364,7 +364,7 @@ def test_main_envelope_reports_partial_failure(env, monkeypatch, capsys):
     """N-01: JSON stdout must carry success/status + structured errors."""
     import json
 
-    def fake_analyze(code, days=120, fetch_news=False):
+    def fake_analyze(code, days=120, fetch_news=False, **kw):
         if code == "BAD":
             raise ValueError("Cannot classify stock code: BAD")
         return {"code": code, "market": "cn_a", "currency": "CNY"}
@@ -390,7 +390,7 @@ def test_main_envelope_reports_full_success(env, monkeypatch, capsys):
     import json
 
     monkeypatch.setattr(sdf, "analyze_stock",
-                        lambda code, days=120, fetch_news=False:
+                        lambda code, days=120, fetch_news=False, **kw:
                         {"code": code, "market": "cn_a", "currency": "CNY"})
     monkeypatch.setattr(sdf.sys, "argv",
                         ["stock_data_fetcher.py", "--stocks", "600519"])

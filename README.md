@@ -302,6 +302,7 @@ Each `stocks[]` entry:
 | `events` | `upcoming_unlocks`, `unlock_pct_30d`, `unlock_gate_status` (`active` / `not_enabled`) (A-share float unlocks) |
 | `trend_score` | `total`, `breakdown` (7 components), `signal` / `signal_cn`, `buy_gates[]`, `warnings[]` |
 | `combo` | Phase-aware combo: `phase`, `primary`, `primary_score`, `weight`, `secondary`, `secondary_score`, `gates[]`, `gate_results`, `gate_blocked`, `combo_score`, `context`. `null` when the helper modules are missing or the bar is still in warmup |
+| `fundamentals` *(with `--fundamentals`)* | N-04 fundamental layer: `{data, analysis}`. `data` = `{market, code, currency, source, fetched_at, period_type, report_period, metrics{15 keys}, missing{reason per gap}, status}` (`ok`/`partial`/`insufficient`); `analysis` = five dimension grades (`profitability`, `growth`, `cash_flow_quality`, `financial_safety`, `competitive_position`; levels `strong`/`ok`/`weak`/`insufficient`) + `overall` + `confidence_impact` (`none`/`minor`/`major`) + `warnings[]`. Missing values are never guessed — every gap is explained in `missing`. `null` when the flag is off or every source failed |
 | `recent_bars` / `as_of` / `total_bars` | Last 10 bars (dates aligned to the indicator input), indicator cutoff date, bars fetched |
 | `news[]` *(with `--news`)* | `title`, `content`, `url`, `date`, `source`, `publisher`; the analyzer additionally sets `age_days`, `sentiment`, `event_type[]`, `major_risk` |
 | `news_summary` *(with `--news`)* | `sentiment_score` (14-day half-life, range [-1, 1]), `sentiment_label`, `counts`, `event_types[]`, `has_major_risk`, `dated_items`, `total_items`, `stale` |
@@ -340,6 +341,10 @@ Decision-layer hard rules (N-10) — each can block `BUY_CANDIDATE` on its own:
 - `phase = downtrend_decline` → trend continuation (only a gate-confirmed mean-reversion
   setup reaches `SMALL_POSITION_ONLY`)
 - `rr_ratio < 1.5`, sealed limit-up, or a `>= 5%` float unlock within 30 days
+- Long-term horizon (N-04): a `long_term` horizon without fundamental evidence
+  (`fundamentals` absent or `analysis.overall = insufficient`) can never reach
+  `BUY_CANDIDATE` — it demotes to `WATCHLIST`; a `major` fundamental confidence
+  impact also lowers `confidence` one step
 
 These live in the decision layer only: `calc_trend_score` and the frozen backtest signal
 distribution are unchanged, so every `reports/*.json` research number still reproduces.
