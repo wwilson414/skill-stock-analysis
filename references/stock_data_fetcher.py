@@ -70,20 +70,103 @@ def _log(msg):
 
 
 # ============================================================
+# Market normalization constants
+# ============================================================
+
+MARKET_CURRENCY = {
+    "cn_a": "CNY",
+    "cn_hk": "HKD",
+    "us": "USD",
+}
+
+# Trading-rule objects per market (N-03: market-specific execution constraints).
+# Describes lot size, T+1 settlement, limit-up/down regime, and trading-calendar
+# reference so reports can state market rules explicitly instead of silently.
+_MARKET_RULES = {
+    "cn_a": {
+        "exchange": "SSE/SZE/BSE",
+        "currency": "CNY",
+        "t_plus_1": True,
+        "limit_up_pct": 10.0,       # main board; STAR/ChiNext/BSE use 20%/30% (see tradability)
+        "limit_down_pct": 10.0,
+        "lot_size": 100,            # A-share trades in 100-share board lots
+        "has_limit_up_down": True,
+        "trading_calendar_ref": "SSE",
+        "execution_notes": (
+            "T+1 settlement; sealed limit-up cannot be bought intraday; "
+            "limit-down may block stop-loss fills; large float unlocks can "
+            "create overnight gap risk."
+        ),
+    },
+    "cn_hk": {
+        "exchange": "HKEX",
+        "currency": "HKD",
+        "t_plus_1": False,
+        "limit_up_pct": None,       # no daily limit for most HK stocks (±10% for some)
+        "limit_down_pct": None,
+        "lot_size": 100,            # typical HK lot size (varies by stock)
+        "has_limit_up_down": False,
+        "trading_calendar_ref": "HKEX",
+        "execution_notes": (
+            "No T+1; no hard daily limit for most stocks; USD/HKD linked "
+            "exchange-rate environment; mainland exposure for some names."
+        ),
+    },
+    "us": {
+        "exchange": "NYSE/NASDAQ/AMEX",
+        "currency": "USD",
+        "t_plus_1": False,
+        "limit_up_pct": None,
+        "limit_down_pct": None,
+        "lot_size": 1,
+        "has_limit_up_down": False,
+        "trading_calendar_ref": "US market calendar (NYSE/AMEX)",
+        "execution_notes": (
+            "No T+1; no daily limit-up/down; after-hours trading may cause "
+            "price gaps; quarterly reporting (GAAP / non-GAAP)."
+        ),
+    },
+}
+
+
+def market_currency(market: str) -> str:
+    """Return the ISO currency code for a market ('cn_a'/'cn_hk'/'us')."""
+    return MARKET_CURRENCY.get(market, "USD")
+
+
+def market_rules(market: str) -> dict:
+    """Return a copy of the market trading-rule object for *market*."""
+    return dict(_MARKET_RULES.get(market, _MARKET_RULES["us"]))
+
+
+# ============================================================
 # SECTION 1: Stock Code Parser
 # ============================================================
 
 def classify_stock(code: str) -> tuple:
     """
     Returns (market, normalized_code, display_code)
-    market: 'cn_a', 'cn_hk', 'us'
+    - market: 'cn_a', 'cn_hk', 'us', or 'unknown'
+    - normalized_code: bare code used by data-source APIs (e.g. '00700', '600519', 'AAPL')
+    - display_code: canonical display form (e.g. 'HK00700', '600519', 'AAPL')
+
+    Accepted input formats:
+    - A-share: 600519, 600519.SH, SH600519
+    - HK: HK00700, 0700.HK, 00700.HK
+    - US: AAPL, TSLA
+    - Chinese company name (resolved via THS/akshare at fetch time)
     """
     code = code.strip()
     upper = code.upper()
 
-    # HK: HK00700 -> ('cn_hk', '00700', 'HK00700')
+    # HK with .HK suffix: 0700.HK -> ('cn_hk', '00700', '0700.HK')
+    if upper.endswith(".HK") and upper[:-3].isdigit():
+        hk_num = upper[:-3].zfill(5)
+        return ("cn_hk", hk_num, upper)
+
+    # HK with HK prefix: HK00700 -> ('cn_hk', '00700', 'HK00700')
     if upper.startswith("HK") and upper[2:].isdigit():
-        return ("cn_hk", upper[2:], upper)
+        return ("cn_hk", upper[2:].zfill(5), upper)
 
     # A-share: 600519 -> ('cn_a', '600519', '600519')
     if upper.isdigit() and len(upper) == 6:
@@ -1283,6 +1366,7 @@ def fetch_cn_a(code: str, days: int) -> dict:
     realtime = _fetch_realtime_a(code)
     name = realtime.get("name", code)
     return {"ohlcv": ohlcv, "realtime": realtime, "name": name, "source": source,
+            "currency": market_currency("cn_a"), "market_rules": market_rules("cn_a"),
             "adjustment": _SOURCE_ADJUSTMENT, "errors": errors}
 
 
@@ -1337,6 +1421,7 @@ def fetch_hk(code: str, days: int) -> dict:
         errors.append("realtime: all quote sources failed, using last daily bar")
     name = realtime.get("name") or f"HK{code}"
     return {"ohlcv": ohlcv, "realtime": realtime, "name": name, "source": source,
+            "currency": market_currency("cn_hk"), "market_rules": market_rules("cn_hk"),
             "adjustment": _SOURCE_ADJUSTMENT, "errors": errors}
 
 
@@ -1374,7 +1459,9 @@ def fetch_us(code: str, days: int) -> dict:
         }
         errors.append("realtime: all quote sources failed, using last daily bar")
     name = realtime.get("name", code)
-    return {"ohlcv": ohlcv, "realtime": realtime, "name": name, "source": source, "errors": errors}
+    return {"ohlcv": ohlcv, "realtime": realtime, "name": name, "source": source,
+            "currency": market_currency("us"), "market_rules": market_rules("us"),
+            "errors": errors}
 
 
 # ============================================================
@@ -2567,6 +2654,650 @@ def calc_trend_score(ma_data: dict, macd_data: dict, rsi_data: dict,
 
 
 # ============================================================
+# SECTION 4.5: Data Quality Contract (N-01)
+# ============================================================
+#
+# Every result must state which source actually served the data, whether a
+# fallback was used, what is missing, and how that moves confidence. The
+# available-library list is *never* reported as the actual source.
+
+# Field checklist with the penalty (in quality points) applied when missing.
+# Weights reflect how much each field changes a technical decision: price and
+# the MA60 trend anchor dominate; enrichment fields cost less.
+_QUALITY_FIELD_WEIGHTS = {
+    "realtime.price": 30,
+    "indicators.ma.MA60": 15,
+    "indicators.risk.rr_ratio": 10,
+    "realtime.pe_ratio": 8,
+    "realtime.pb_ratio": 8,
+    "indicators.relative_strength.rs_60d": 8,
+    "combo.combo_score": 7,
+    "realtime.name": 4,
+    "indicators.volume.vol_ratio": 4,
+}
+
+QUALITY_LEVELS = ("high", "medium", "low", "insufficient")
+
+# Which source is the preferred (non-fallback) one per market.
+_QUOTE_PRIMARY = {"cn_a": "tencent", "cn_hk": "tencent", "us": "tencent"}
+
+
+def preferred_quote_source(market: str) -> str:
+    """Preferred K-line/quote source for *market* (Tushare when a token is set)."""
+    if market == "cn_a" and os.environ.get("TUSHARE_TOKEN"):
+        return "tushare"
+    return _QUOTE_PRIMARY.get(market, "tencent")
+
+
+def _dig(data: dict, dotted: str):
+    """Fetch a nested value by dotted path; None when any hop is missing."""
+    cur = data
+    for part in dotted.split("."):
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(part)
+        if cur is None:
+            return None
+    return cur
+
+
+def assess_data_quality(result: dict, market: str) -> dict:
+    """Grade a single-stock result and explain what lowers confidence (N-01).
+
+    Deterministic: walks a fixed field checklist, subtracts the documented
+    penalty for each missing field, and records the actual source chain so the
+    report can state whether a fallback served the data.
+    """
+    missing = []
+    score = 100
+    for path, weight in _QUALITY_FIELD_WEIGHTS.items():
+        if path == "combo.combo_score":
+            continue  # handled below: blocked-by-design is not a data gap
+        if _dig(result, path) is None:
+            missing.append(path)
+            score -= weight
+    # `combo.combo_score` is legitimately None when the phase gate blocks the
+    # bar (by design, e.g. downtrend extreme_only or an unconfirmed momentum
+    # gate). Only a missing combo *object* (module unavailable / warmup) is a
+    # real data gap.
+    if result.get("combo") is None:
+        missing.append("combo.combo_score")
+        score -= _QUALITY_FIELD_WEIGHTS["combo.combo_score"]
+    score = max(0, min(100, score))
+
+    realtime = result.get("realtime") or {}
+    ohlcv_source = result.get("data_source") or "unknown"
+    preferred = preferred_quote_source(market)
+    ohlcv_fallback = ohlcv_source not in (preferred, "unknown")
+    rt_source = realtime.get("realtime_source")
+    valuation_source = realtime.get("valuation_source")
+    rt_fallback = bool(rt_source and rt_source == "last_daily_bar")
+    fetch_errors = list(result.get("fetch_errors") or [])
+
+    fallback_used = bool(ohlcv_fallback or rt_fallback or valuation_source
+                         or fetch_errors)
+    if ohlcv_fallback:
+        score -= 10
+
+    caveats = []
+    if ohlcv_fallback:
+        caveats.append(
+            f"K-line served by fallback source '{ohlcv_source}' "
+            f"(preferred: '{preferred}')")
+    if rt_fallback:
+        caveats.append(
+            "realtime quote unavailable from all live sources; last daily bar used")
+    if valuation_source:
+        caveats.append(f"P/E-P/B filled by fallback valuation source '{valuation_source}'")
+    if fetch_errors:
+        caveats.append(f"{len(fetch_errors)} data-source error(s) during fetch")
+    if missing:
+        caveats.append("missing fields: " + ", ".join(missing))
+    # A-share unlock gate: "not_enabled" means no ratio could be resolved, which
+    # is a coverage gap rather than a data error — reported but not penalised.
+    unlock_status = _dig(result, "events.unlock_gate_status")
+    if market == "cn_a" and unlock_status == "not_enabled":
+        missing.append("events.unlock_pct_30d")
+        caveats.append(
+            "float-unlock gate not enabled (no ratio resolved): unlock risk unassessed")
+
+    if score >= 85 and not ohlcv_fallback:
+        level = "high"
+    elif score >= 60:
+        level = "medium"
+    elif score >= 35:
+        level = "low"
+    else:
+        level = "insufficient"
+
+    impact = {"high": "none", "medium": "minor", "low": "moderate",
+              "insufficient": "major"}[level]
+
+    return {
+        "level": level,
+        "score": score,
+        "missing_fields": missing,
+        "caveats": caveats,
+        "confidence_impact": impact,
+        "fallback_used": fallback_used,
+        "sources": {
+            "ohlcv": ohlcv_source,
+            "ohlcv_preferred": preferred,
+            "ohlcv_fallback": ohlcv_fallback,
+            "realtime": rt_source,
+            "valuation": valuation_source,
+            "errors": fetch_errors,
+        },
+        "as_of": result.get("as_of"),
+        "adjustment": result.get("adjustment", "unknown"),
+        "fetch_time": result.get("fetch_time"),
+    }
+
+
+# ============================================================
+# SECTION 4.6: Decision Support States & Evidence (N-02 / N-10)
+# ============================================================
+#
+# The score layer answers "how strong is the setup"; this layer answers
+# "what decision state is defensible, with what evidence, and when must it be
+# re-checked". It only ever *demotes* from a buy-grade setup: technical gates,
+# missing fundamentals/valuation and low data quality can block a candidate,
+# but nothing here fabricates an upside.
+
+DECISION_STATES = (
+    "STRONG_AVOID", "AVOID", "WATCHLIST", "BUY_CANDIDATE",
+    "SMALL_POSITION_ONLY", "HOLD", "REDUCE", "SELL_OR_EXIT",
+    "RECHECK_REQUIRED",
+)
+
+DECISION_DISCLAIMER = (
+    "This analysis is for personal research and decision support only. It is "
+    "not financial advice, does not guarantee returns, and should not be "
+    "treated as a direct instruction to buy or sell. The user remains "
+    "responsible for all investment decisions."
+)
+
+# N-10: explicit technical hard rules. These live in the *decision* layer, not
+# in calc_trend_score, so the frozen backtest signal distribution (and every
+# reports/*.json number behind DECISIONS D1-D14) stays bit-identical.
+DECISION_HARD_RULES = {
+    "rsi_overbought": 80.0,      # max(RSI6, RSI12) > 80 -> never BUY_CANDIDATE
+    "bias_ma5_max_pct": 5.0,     # MA5 bias > 5% -> never BUY_CANDIDATE
+}
+
+DEFAULT_TECHNICAL_HORIZON = "5-20 trading days"
+# Mirrors paper_trader's default portfolio width so the suggested cap uses the
+# same (1/max_positions) x phase-weight sizing that was validated in P4-4.
+DEFAULT_MAX_POSITIONS = 5
+
+_BULLISH_ALIGNMENTS = ("bullish", "strong_bullish", "weak_bullish")
+_BEARISH_ALIGNMENTS = ("bearish", "strong_bearish")
+
+
+def _fmt_pct(v, digits=2):
+    return f"{v:+.{digits}f}%" if isinstance(v, (int, float)) else "n/a"
+
+
+def _max_rsi(rsi_data: dict):
+    """Highest of RSI6/RSI12 (the short-term overbought reading), or None.
+
+    calc_rsi emits the uppercase keys ``RSI6`` / ``RSI12``; the lowercase
+    aliases are accepted too so callers can pass either shape.
+    """
+    rsi_data = rsi_data or {}
+    vals = [v for v in (rsi_data.get("RSI6"), rsi_data.get("RSI12"),
+                        rsi_data.get("rsi6"), rsi_data.get("rsi12"))
+            if isinstance(v, (int, float))]
+    return max(vals) if vals else None
+
+
+def _decision_gates(market: str, score: dict, combo, indicators: dict,
+                    market_rules_obj: dict) -> list:
+    """Collect every gate that must be visible on the decision card.
+
+    Superset of ``trend_score.buy_gates`` — it repeats the score-layer gates
+    (so the card never hides an execution block) and adds the N-10
+    overbought / overextended rules plus the combo gate state.
+    """
+    ctx = indicators.get("context") or {}
+    risk = indicators.get("risk") or {}
+    tradability = indicators.get("tradability") or {}
+    events = indicators.get("events") or {}
+    rsi_max = _max_rsi(indicators.get("rsi") or {})
+    bias = indicators.get("bias") or {}
+
+    gates = []
+    phase = ctx.get("phase")
+    if phase == "downtrend_decline":
+        gates.append(f"phase={phase}: downtrend, pullback-like patterns are continuation")
+    if rsi_max is not None and rsi_max > DECISION_HARD_RULES["rsi_overbought"]:
+        gates.append(
+            f"rsi={round(rsi_max, 2)} > {DECISION_HARD_RULES['rsi_overbought']}: "
+            f"overbought, no BUY_CANDIDATE")
+    bias_ma5 = bias.get("bias_ma5")
+    if bias_ma5 is not None and bias_ma5 > DECISION_HARD_RULES["bias_ma5_max_pct"]:
+        gates.append(
+            f"bias_ma5={round(bias_ma5, 2)}% > "
+            f"{DECISION_HARD_RULES['bias_ma5_max_pct']}%: overextended, "
+            f"no BUY_CANDIDATE")
+    rr = risk.get("rr_ratio")
+    if rr is not None and rr < 1.5:
+        gates.append(f"rr_ratio={rr} < 1.5: risk/reward not justified")
+    limit_status = tradability.get("limit_status")
+    if limit_status == "limit_up":
+        gates.append("limit_up: limit up sealed, buy not executable today (T+1)")
+    unlock_pct = events.get("unlock_pct_30d")
+    if unlock_pct is not None and unlock_pct >= 5:
+        gates.append(f"upcoming unlock {unlock_pct}% of float within 30d: large unlock")
+    if combo is None:
+        gates.append("combo: unavailable (phase-aware signal not computed)")
+    elif combo.get("gate_blocked"):
+        gate_names = ", ".join(combo.get("gates") or []) or "unspecified"
+        gates.append(f"combo gate blocked ({gate_names})")
+    # Keep the score-layer text verbatim too, so nothing the scorer blocked
+    # can be lost by the decision layer.
+    for g in (score or {}).get("buy_gates") or []:
+        if g not in gates:
+            gates.append(g)
+    return gates
+
+
+def _supporting_evidence(score: dict, combo, indicators: dict) -> list:
+    ctx = indicators.get("context") or {}
+    ma = indicators.get("ma") or {}
+    macd = indicators.get("macd") or {}
+    vol = indicators.get("volume") or {}
+    rs = indicators.get("relative_strength") or {}
+    out = []
+    total = (score or {}).get("total")
+    if total is not None:
+        out.append(f"technical score {total}/100 "
+                   f"({(score or {}).get('signal_cn') or (score or {}).get('signal')})")
+    if combo and combo.get("combo_score") is not None:
+        out.append(f"phase-aware combo score {combo['combo_score']} "
+                   f"({combo.get('primary')} × weight {combo.get('weight')}, "
+                   f"phase {combo.get('phase')})")
+    if ma.get("alignment"):
+        out.append(f"MA alignment {ma['alignment']}")
+    if macd.get("signal"):
+        out.append(f"MACD signal {macd['signal']}")
+    if vol.get("trend"):
+        out.append(f"volume pattern {vol['trend']} "
+                   f"(vol_ratio {vol.get('vol_ratio')})")
+    if rs.get("rs_60d") is not None:
+        out.append(f"relative strength vs {rs.get('benchmark')} "
+                   f"60d {_fmt_pct(rs['rs_60d'])}")
+    if ctx.get("dist_ma60_pct") is not None:
+        out.append(f"distance from MA60 {_fmt_pct(ctx['dist_ma60_pct'])}")
+    return out
+
+
+def _opposing_evidence(score: dict, combo, indicators: dict, gates: list) -> list:
+    ctx = indicators.get("context") or {}
+    rs = indicators.get("relative_strength") or {}
+    risk = indicators.get("risk") or {}
+    out = list(gates)
+    if ctx.get("chg_20d_pct") is not None and ctx["chg_20d_pct"] < 0:
+        out.append(f"20-day change {_fmt_pct(ctx['chg_20d_pct'])} (negative drift)")
+    if rs.get("rs_60d") is not None and rs["rs_60d"] < -5:
+        out.append(f"lagging benchmark by {_fmt_pct(rs['rs_60d'])} (60d)")
+    if risk.get("ann_vol_pct") is not None:
+        out.append(f"annualized volatility {risk['ann_vol_pct']}%")
+    if (score or {}).get("total") is not None and score["total"] < 45:
+        out.append(f"weak composite score {score['total']}/100")
+    return out
+
+
+def _key_risks(market: str, indicators: dict, market_rules_obj: dict,
+               data_quality: dict) -> list:
+    """Structured risk notes: {category, severity, evidence, impact, monitoring_indicator}.
+
+    Categories follow the requirement's risk taxonomy; severity is derived from
+    data actually present (never invented). The full nine-category model with
+    fundamentals and portfolio context is N-06/N-07.
+    """
+    ctx = indicators.get("context") or {}
+    risk = indicators.get("risk") or {}
+    tradability = indicators.get("tradability") or {}
+    events = indicators.get("events") or {}
+    rs = indicators.get("relative_strength") or {}
+    out = []
+
+    def add(category, severity, evidence, monitor, impact):
+        out.append({"category": category, "severity": severity,
+                    "evidence": evidence, "impact": impact,
+                    "monitoring_indicator": monitor})
+
+    if ctx.get("phase") == "downtrend_decline":
+        add("technical", "high",
+            "phase=downtrend_decline: strong bearish alignment or sustained decline",
+            "close vs MA60 and 20-day change",
+            "pullback entries are trend continuation, not value")
+    if risk.get("atr_pct") is not None and risk["atr_pct"] >= 4:
+        add("market", "medium",
+            f"ATR is {risk['atr_pct']}% of price (high volatility)",
+            "ATR% and annualized volatility",
+            "stop distance and position sizing")
+    if rs.get("rs_60d") is not None and rs["rs_60d"] < -5:
+        add("market", "medium",
+            f"underperforming benchmark by {_fmt_pct(rs['rs_60d'])} over 60d",
+            "60-day relative strength", "opportunity cost vs index")
+    if tradability.get("limit_status") in ("limit_up", "limit_down",
+                                           "near_limit_up", "near_limit_down"):
+        add("liquidity", "medium",
+            f"limit status {tradability['limit_status']} "
+            f"(limit ±{tradability.get('limit_threshold_pct')}%)",
+            "daily change vs limit threshold", "entries/stops may not fill")
+    if events.get("upcoming_unlocks"):
+        pct = events.get("unlock_pct_30d")
+        add("market", "high" if (pct or 0) >= 5 else "medium",
+            f"{len(events['upcoming_unlocks'])} float unlock event(s) within 60d"
+            + (f", max {pct}% of float within 30d" if pct is not None else ""),
+            "unlock calendar / float supply", "supply overhang can cap upside")
+    if data_quality.get("level") in ("low", "insufficient"):
+        add("market", "high" if data_quality["level"] == "insufficient" else "medium",
+            "; ".join(data_quality.get("caveats") or []) or "degraded data quality",
+            "source availability and missing-field list",
+            "conclusions carry wider error bars")
+    if market != "cn_a" and market_rules_obj.get("currency"):
+        add("currency", "low",
+            f"prices and valuation are stated in {market_rules_obj['currency']}",
+            "FX rate vs your base currency",
+            "base-currency return differs from local return")
+    if not out:
+        add("technical", "low",
+            "no elevated risk signal in the available technical data",
+            "phase, ATR%, relative strength",
+            "none identified from technicals alone")
+    return out
+
+
+def _suggested_action_range(state: str, risk: dict) -> dict:
+    """Explicit, non-precise action band + script-provided price levels."""
+    bands = {
+        "BUY_CANDIDATE": "Consider a staged entry; scale in on strength, not all at once.",
+        "SMALL_POSITION_ONLY": "Exploratory small position only; add only on confirmation.",
+        "HOLD": "Maintain existing exposure; no fresh entry justified by current evidence.",
+        "WATCHLIST": "No position now; wait for the blocking condition to clear.",
+        "RECHECK_REQUIRED": "Do not act until data gaps are re-fetched and the setup re-evaluated.",
+        "AVOID": "Do not initiate; the setup is not favourable.",
+        "STRONG_AVOID": "Do not initiate; multiple unfavourable conditions align.",
+        "REDUCE": "Trim existing exposure toward the target weight.",
+        "SELL_OR_EXIT": "Exit existing exposure; no technical case to hold.",
+    }
+    return {
+        "action_band": bands.get(state, "No action guidance available."),
+        "price_levels_source": "indicators.risk (script output — do not fabricate)",
+        "stop_suggested": risk.get("stop_suggested"),
+        "target_suggested": risk.get("target_suggested"),
+        "rr_ratio": risk.get("rr_ratio"),
+    }
+
+
+def _re_evaluation_triggers(state: str, indicators: dict) -> list:
+    ctx = indicators.get("context") or {}
+    risk = indicators.get("risk") or {}
+    ma = indicators.get("ma") or {}
+    out = ["new earnings / guidance release",
+           "re-fetch when as_of is older than 3 trading days"]
+    if ctx.get("phase") == "downtrend_decline":
+        out.append("close reclaims MA60 or 20-day change turns positive (phase change)")
+    else:
+        out.append("close breaks below MA60 or the 20-day change turns clearly negative")
+    if risk.get("stop_suggested") is not None:
+        out.append(f"close at/below stop {risk['stop_suggested']} invalidates the setup")
+    if risk.get("target_suggested") is not None:
+        out.append(f"reaching target {risk['target_suggested']} triggers a "
+                   f"re-assessment (not an automatic exit)")
+    if ma.get("alignment") in _BEARISH_ALIGNMENTS:
+        out.append("MA alignment turns non-bearish")
+    if state in ("AVOID", "STRONG_AVOID", "WATCHLIST"):
+        out.append("evidence of a mean-reversion setup confirmed with stabilization")
+    return out
+
+
+def _decision_confidence(state: str, data_quality: dict, score: dict, combo) -> str:
+    """Confidence in *the decision*, lowered by weak data and mixed signals."""
+    if data_quality.get("level") == "insufficient":
+        return "insufficient_data"
+    rank = {"high": 3, "medium": 2, "low": 1}.get(data_quality.get("level"), 1)
+    total = (score or {}).get("total")
+    if total is not None:
+        if total >= 75 or total < 30:
+            rank = min(3, rank + 1)     # decisive readings are easier to trust
+        elif 45 <= total < 60:
+            rank = max(1, rank - 1)     # mid-band scores are ambiguous
+    if combo is None:
+        rank -= 1
+    elif combo.get("combo_score") is not None and total is not None \
+            and combo["combo_score"] * (total - 50) < 0:
+        rank -= 1                        # combo and score disagree
+    return {3: "high", 2: "medium", 1: "low"}.get(max(1, rank), "low")
+
+
+def _position_cap(weight, max_positions: int = DEFAULT_MAX_POSITIONS):
+    """Suggested single-name cap = (1/max_positions) x phase weight, capped by RISK.
+
+    Same sizing law as paper_trader.PaperTrader (validated in P4-4); the
+    per-stock risk ceiling comes from score_config.RISK when importable so the
+    value is never duplicated here.
+    """
+    max_per_stock = 0.20
+    try:
+        from score_config import RISK
+        max_per_stock = float(RISK.get("max_per_stock", max_per_stock))
+    except Exception:
+        pass  # script copied out of the repo: fall back to the documented default
+    unit = 1.0 / max(1, int(max_positions))
+    return round(min(max_per_stock, unit * float(weight)), 4)
+
+
+def build_decision(market: str, score: dict, combo, indicators: dict,
+                   data_quality: dict, market_rules_obj: dict = None,
+                   horizon: str = None) -> dict:
+    """Map technical evidence to a decision-support state (N-02).
+
+    Only demotes: a buy-grade setup needs the score, the combo signal *and*
+    clear hard gates. Every state carries supporting/opposing evidence, key
+    risks, a re-evaluation trigger list and the fixed disclaimer.
+    """
+    market_rules_obj = market_rules_obj or market_rules(market)
+    horizon = horizon or DEFAULT_TECHNICAL_HORIZON
+    ctx = indicators.get("context") or {}
+    ma = indicators.get("ma") or {}
+    risk = indicators.get("risk") or {}
+    tradability = indicators.get("tradability") or {}
+
+    total = (score or {}).get("total")
+    alignment = ma.get("alignment", "consolidation")
+    phase = ctx.get("phase")
+    limit_status = tradability.get("limit_status")
+    rsi_max = _max_rsi(indicators.get("rsi") or {})
+    bias_ma5 = (indicators.get("bias") or {}).get("bias_ma5")
+    rr = risk.get("rr_ratio")
+
+    gates = _decision_gates(market, score, combo, indicators, market_rules_obj)
+    combo_ok = bool(combo and not combo.get("gate_blocked")
+                    and combo.get("combo_score") is not None)
+    bullish = alignment in _BULLISH_ALIGNMENTS
+    bearish = alignment in _BEARISH_ALIGNMENTS
+    downtrend = phase == "downtrend_decline"
+    overbought = (rsi_max is not None
+                  and rsi_max > DECISION_HARD_RULES["rsi_overbought"])
+    overextended = (bias_ma5 is not None
+                    and bias_ma5 > DECISION_HARD_RULES["bias_ma5_max_pct"])
+    blocked_buy = downtrend or overbought or overextended or (rr is not None and rr < 1.5)
+
+    if data_quality.get("level") == "insufficient":
+        state = "RECHECK_REQUIRED"
+    elif limit_status == "limit_up":
+        state = "WATCHLIST"       # setup may be fine, but it cannot be executed today
+    elif downtrend:
+        state = "SMALL_POSITION_ONLY" if combo_ok else "AVOID"
+    elif blocked_buy:
+        state = "AVOID" if bearish else "WATCHLIST"
+    elif total is None:
+        state = "RECHECK_REQUIRED"
+    elif total >= 60 and bullish and combo_ok:
+        state = "BUY_CANDIDATE"
+    elif total >= 60 and bullish:
+        state = "SMALL_POSITION_ONLY"
+    elif total >= 45:
+        state = "WATCHLIST"
+    elif bearish:
+        state = "SELL_OR_EXIT"
+    else:
+        state = "AVOID"
+
+    if state == "AVOID" and total is not None and total < 30 and bearish:
+        state = "STRONG_AVOID"
+
+    if state not in DECISION_STATES:  # defensive: never emit an unknown state
+        state = "RECHECK_REQUIRED"
+
+    return _decision_payload(market, state, horizon, score, combo, indicators,
+                             data_quality, market_rules_obj, gates)
+
+
+def _decision_payload(market, state, horizon, score, combo, indicators,
+                      data_quality, market_rules_obj, gates) -> dict:
+    """Assemble the decision object (kept separate for readability)."""
+    risk = indicators.get("risk") or {}
+    confidence = _decision_confidence(state, data_quality, score, combo)
+    warning = None
+    if data_quality.get("confidence_impact") in ("moderate", "major"):
+        warning = ("data quality " + data_quality["level"] + ": "
+                   + "; ".join(data_quality.get("caveats") or []))
+
+    position_size = None
+    if state in ("BUY_CANDIDATE", "SMALL_POSITION_ONLY"):
+        weight = (combo or {}).get("weight")
+        cap = _position_cap(weight) if weight else 0.10
+        position_size = {
+            "suggested_max_weight": cap,
+            "basis": (f"(1/{DEFAULT_MAX_POSITIONS}) x combo phase weight {weight}, "
+                      f"capped by score_config.RISK.max_per_stock" if weight
+                      else "combo unavailable — conservative default"),
+            "note": ("cap only; actual size must also respect portfolio "
+                     "concentration limits"),
+        }
+
+    return {
+        "state": state,
+        "horizon": horizon,
+        "intent": "technical",
+        "confidence": confidence,
+        "supporting_evidence": _supporting_evidence(score, combo, indicators),
+        "opposing_evidence": _opposing_evidence(score, combo, indicators, gates),
+        "key_risks": _key_risks(market, indicators, market_rules_obj, data_quality),
+        "hard_gates": gates,
+        "suggested_action_range": _suggested_action_range(state, risk),
+        "position_size_suggestion": position_size,
+        "re_evaluation_triggers": _re_evaluation_triggers(state, indicators),
+        "data_quality_warning": warning,
+        "assumptions": [
+            f"Horizon assumed to be {horizon} (technical mode).",
+            "No portfolio supplied: the state is expressed from a fresh-entry "
+            "perspective; holders should map AVOID/HOLD/REDUCE/SELL_OR_EXIT "
+            "through the portfolio workflow.",
+            "Fundamentals and full valuation are not part of this decision; a "
+            "long-term investment conclusion requires them and may not be "
+            "derived from this technical state alone.",
+        ],
+        "market_rules": market_rules_obj,
+        "disclaimer": DECISION_DISCLAIMER,
+    }
+
+
+# ============================================================
+# SECTION 4.7: Structured Error Contract (N-01)
+# ============================================================
+#
+# Every failure is reported as {code, message, retryable} so a caller can
+# decide whether to retry, ask the user, or continue with other tickers.
+
+ERROR_CODES = (
+    "INVALID_TICKER", "UNSUPPORTED_MARKET", "DATA_SOURCE_UNAVAILABLE",
+    "DATA_NOT_FOUND", "MISSING_REQUIRED_INPUT", "INSUFFICIENT_HISTORY",
+    "RATE_LIMITED", "CALCULATION_ERROR", "VALIDATION_FAILED", "TIMEOUT",
+    "UNKNOWN_ERROR",
+)
+
+# (substring in the lowercased message, error code) — first match wins.
+_ERROR_HINTS = (
+    ("cannot classify stock code", "INVALID_TICKER"),
+    ("unknown_market", "UNSUPPORTED_MARKET"),
+    ("all data sources failed", "DATA_SOURCE_UNAVAILABLE"),
+    ("not set", "DATA_SOURCE_UNAVAILABLE"),
+    ("returned no data", "DATA_NOT_FOUND"),
+    ("insufficient", "INSUFFICIENT_HISTORY"),
+    ("no required input", "MISSING_REQUIRED_INPUT"),
+    ("required", "MISSING_REQUIRED_INPUT"),
+    ("429", "RATE_LIMITED"),
+    ("rate limit", "RATE_LIMITED"),
+    ("too many requests", "RATE_LIMITED"),
+    ("timed out", "TIMEOUT"),
+    ("timeout", "TIMEOUT"),
+    ("validation", "VALIDATION_FAILED"),
+    ("calculation", "CALCULATION_ERROR"),
+)
+
+# Retryability: transient conditions are retryable, bad input is not.
+_RETRYABLE = {
+    "INVALID_TICKER": False,
+    "UNSUPPORTED_MARKET": False,
+    "DATA_SOURCE_UNAVAILABLE": True,
+    "DATA_NOT_FOUND": False,
+    "MISSING_REQUIRED_INPUT": False,
+    "INSUFFICIENT_HISTORY": False,
+    "RATE_LIMITED": True,
+    "CALCULATION_ERROR": False,
+    "VALIDATION_FAILED": False,
+    "TIMEOUT": True,
+    "UNKNOWN_ERROR": True,
+}
+
+
+def error_payload(code, exc: Exception = None, message: str = None) -> dict:
+    """Build the {code, message, retryable} error object for one failure.
+
+    ``error``/``type`` are kept alongside for backwards compatibility with the
+    pre-N-01 envelope documented in README.
+    """
+    exc = exc if exc is not None else Exception(message or "unknown error")
+    text = message or f"{type(exc).__name__}: {exc}"
+    lowered = text.lower()
+    err_code = "UNKNOWN_ERROR"
+    for hint, mapped in _ERROR_HINTS:
+        if hint in lowered:
+            err_code = mapped
+            break
+    if err_code == "UNKNOWN_ERROR" and isinstance(exc, TimeoutError):
+        err_code = "TIMEOUT"
+    if err_code == "UNKNOWN_ERROR" and isinstance(exc, ValueError):
+        err_code = "VALIDATION_FAILED"
+    return {
+        "code": code,
+        "error": text,
+        "type": type(exc).__name__,
+        "message": text,
+        "error_code": err_code,
+        "retryable": _RETRYABLE.get(err_code, True),
+    }
+
+
+def envelope_status(total_requested: int, total_success: int) -> tuple:
+    """(success, status) for the run envelope: success / partial / failure / no_data."""
+    if total_requested <= 0:
+        return False, "no_data"
+    if total_success == total_requested:
+        return True, "success"
+    if total_success > 0:
+        return False, "partial"
+    return False, "failure"
+
+
+# ============================================================
 # SECTION 5: Main Orchestrator
 # ============================================================
 
@@ -2870,6 +3601,7 @@ def analyze_stock(code: str, days: int = 120, fetch_news: bool = False) -> dict:
         "code": display,
         "market": market,
         "name": raw.get("name", display),
+        "currency": raw.get("currency") or market_currency(market),
         "data_source": raw.get("source", "unknown"),
         "fetch_errors": raw.get("errors", []),
         "realtime": raw.get("realtime", {}),
@@ -2895,6 +3627,16 @@ def analyze_stock(code: str, days: int = 120, fetch_news: bool = False) -> dict:
         "total_bars": len(ohlcv),
         "fetch_time": datetime.now().isoformat(),
     }
+    # N-01: data-quality contract + N-02/N-03: decision state and market rules.
+    # Both are derived from the technical result only — no invented inputs.
+    result["market_rules"] = raw.get("market_rules") or market_rules(market)
+    result["data_quality"] = assess_data_quality(result, market)
+    decision_view = dict(result["indicators"])
+    decision_view["events"] = result["events"]
+    decision_view["risk"] = risk
+    result["decision"] = build_decision(
+        market, score, combo, decision_view, result["data_quality"],
+        market_rules_obj=result["market_rules"])
     if news:
         result["news"] = news
     if news_summary is not None:
@@ -3599,7 +4341,7 @@ def main():
                 # Print report to stderr for visibility
                 _log(f"\n{backtest_report(calib)}")
             except Exception as e:
-                errors.append({"code": code, "error": str(e), "type": type(e).__name__})
+                errors.append(error_payload(code, e))
 
         output = {
             "analysis_date": datetime.now().strftime("%Y-%m-%d"),
@@ -3610,6 +4352,8 @@ def main():
             "total_requested": len(codes),
             "total_success": len(backtest_results),
         }
+        output["success"], output["status"] = envelope_status(
+            len(codes), len(backtest_results))
         # Regime-segmented IC: pooled by pullback phase across stocks.
         if backtest_results:
             ph_analysis = pooled_phase_analysis(backtest_results)
@@ -3649,7 +4393,7 @@ def main():
             result = analyze_stock(code, args.days, fetch_news=args.news)
             results.append(result)
         except Exception as e:
-            errors.append({"code": code, "error": str(e), "type": type(e).__name__})
+            errors.append(error_payload(code, e))
 
     output = {
         "analysis_date": datetime.now().strftime("%Y-%m-%d"),
@@ -3660,6 +4404,7 @@ def main():
         "total_requested": len(codes),
         "total_success": len(results),
     }
+    output["success"], output["status"] = envelope_status(len(codes), len(results))
 
     print(json.dumps(output, ensure_ascii=False, indent=2))
 

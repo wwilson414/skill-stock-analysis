@@ -21,16 +21,45 @@ For each stock, output one card separated by `---`:
 
 | Metric | Value |
 |--------|-------|
-| Current Price | {price} ({change_pct:+.2f}%) |
+| Decision State | {decision_state_en} (confidence: {decision_confidence}) |
+| Time Horizon | {decision_horizon} |
+| Current Price | {price} {currency} ({change_pct:+.2f}%) |
 | Composite Score | {score}/100 |
 | Signal | {signal_en} |
 | P/E Ratio | {pe_ratio} |
 | P/B Ratio | {pb_ratio} |
 
+> `Decision State` 必须取自 `decision.state`（枚举见下），不要用技术信号替代；`confidence` 取自
+> `decision.confidence`。技术信号（`strong_buy` 等）仅作技术层输入，不能当作长期投资结论。
+
+**Decision States Mapping**
+
+| `decision.state` | English |
+| ---------------- | ------- |
+| STRONG_AVOID | Strong Avoid |
+| AVOID | Avoid |
+| WATCHLIST | Watchlist |
+| BUY_CANDIDATE | Buy Candidate |
+| SMALL_POSITION_ONLY | Small Position Only |
+| HOLD | Hold |
+| REDUCE | Reduce |
+| SELL_OR_EXIT | Sell or Exit |
+| RECHECK_REQUIRED | Recheck Required |
+
 **Hard Gates**: {hard_gates_status}
 
 > Render `fired({buy_gates})` when `trend_score.buy_gates` is non-empty; otherwise render `none`.
 > Preserve the gate text from the script so a buy-grade score cannot hide an execution block.
+> When `decision.hard_gates` is non-empty and `trend_score.buy_gates` is empty (e.g. RSI > 80 or
+> MA5 bias > 5% blocked the candidate), render `fired({decision.hard_gates})` instead.
+
+**Data Quality**: {data_quality_level} (score {data_quality_score}) | Fallback used: {fallback_used} | Sources: {source_chain}
+
+> Render from `data_quality`: `level` (`high`/`medium`/`low`/`insufficient`), `score`,
+> `fallback_used`, and `sources` (`ohlcv` <- `ohlcv_preferred`, plus `realtime` / `valuation`).
+> If `missing_fields` is non-empty, list them; if `caveats` is non-empty, append them verbatim.
+> When `confidence_impact` is `moderate` or `major`, the decision's confidence must be lowered.
+
 
 **Combo Signal (phase-aware, P4-1)**
 - Phase: {combo_phase_en} | Primary: {combo_primary} | Weight: {combo_weight} | Combo Score: {combo_score}
@@ -43,6 +72,10 @@ For each stock, output one card separated by `---`:
 - Relative Strength: vs {bench_en} 20D RS {rs_20d:+.2f}% | 60D RS {rs_60d:+.2f}%
 - Volatility & Risk Levels: ATR {atr} ({atr_pct}%) | Annualized Vol {ann_vol_pct}% | R:R Ratio {rr_ratio}
 - Trading Constraints/Events: {limit_status_en} | 30-day Unlock {unlock_pct_30d_str} ({unlock_gate_status})
+- Market Rules: {market_rules_en}
+
+> Render `market_rules_en` from `market_rules`: currency, T+1, lot size, limit regime and the
+> script's `execution_notes`. Never restate market rules from memory.
 - MA: MA5={ma5} MA10={ma10} MA20={ma20} | {alignment_en}
 - MACD: DIF={dif} DEA={dea} Histogram={hist} | {macd_signal_en}
 - RSI: RSI6={rsi6} RSI12={rsi12} RSI24={rsi24} | {rsi_zone_en}
@@ -59,6 +92,19 @@ For each stock, output one card separated by `---`:
 **Risk Factors**
 - {risk1}
 - {risk2}
+
+**Decision Evidence (from `decision`)**
+- Supporting: {supporting_evidence}
+- Opposing: {opposing_evidence}
+- Key Risks: {key_risks}
+- Suggested Action Range: {suggested_action_range}
+- Position Size Suggestion: {position_size_suggestion}
+- Re-evaluation Triggers: {re_evaluation_triggers}
+
+> Every line must be copied from `decision.*` (script output). Do not add evidence the script did
+> not produce; do not turn the action band into a precise instruction. Render `N/A` for a `null`
+> `position_size_suggestion`. When `decision.data_quality_warning` is set, show it verbatim in
+> `AI Judgment` before any conclusion.
 
 **Price Targets**
 | Entry Price | Target Price | Stop-Loss |
@@ -175,6 +221,10 @@ When `bar_partial` is `false`, leave `bar_partial_note` empty.
 ### Footer
 
 ```
-> Disclaimer: The above analysis is for reference only and does not constitute investment advice. Investment involves risk; enter the market with caution.
-> Data Sources: Tonghuashun / efinance / akshare / yfinance | Analysis Time: {timestamp}
+> Disclaimer: This analysis is for personal research and decision support only. It is not financial advice, does not guarantee returns, and should not be treated as a direct instruction to buy or sell. The user remains responsible for all investment decisions.
+> Data Sources: {source_chain} (as_of {as_of}, adjustment {adjustment}, data quality {data_quality_level}) | Analysis Time: {timestamp}
+
+> The disclaimer text must match `decision.disclaimer` / the requirement verbatim; never shorten it.
+> The data-source line must list what actually served the data (`data_quality.sources`), not the
+> libraries that happen to be installed.
 ```

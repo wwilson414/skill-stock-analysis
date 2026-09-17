@@ -153,6 +153,7 @@ User input
 |---|---|---|---|
 | 6 digits starting with 6/0/3 | A-share | 600519, 000001, 300750 | THS/Tencent/akshare |
 | HK + 5 digits | HK stocks | HK00700, HK09988 | Tencent/efinance/akshare |
+| HK with `.HK` suffix | HK stocks | 0700.HK, 00700.HK | Tencent/efinance/akshare |
 | 1-5 uppercase letters | US stocks | AAPL, TSLA, PLTR | Tencent/yfinance |
 | Chinese company name | A-share/HK if identifiable | 贵州茅台, 腾讯 | THS search / akshare / WebSearch |
 
@@ -160,7 +161,9 @@ Processing rules:
 
 - Multiple stocks may be separated by commas, spaces, or newlines.
 - Remove suffixes such as `.SH`, `.SZ`, `.SS` and prefixes such as `SH`, `SZ` when appropriate.
-- Normalize HK tickers into `HKxxxxx` or compatible script input format.
+- Normalize HK tickers into `HKxxxxx` or compatible script input format; `HK00700`, `0700.HK`
+  and `00700.HK` all resolve to the same internal id, and the script reports the canonical value
+  in `code` (`0700.HK` is echoed for that input form).
 - If ticker cannot be identified, ask the user for clarification with examples.
 
 ---
@@ -263,11 +266,19 @@ python3 /tmp/stock_data_fetcher.py --stocks "CODE1,CODE2,CODE3" --news
 
 Expected JSON includes:
 
+- `success` / `status` (`success` / `partial` / `failure` / `no_data`) and `errors[]` as
+  `{code, message, error_code, retryable}` — never assume every requested ticker succeeded
 - Real-time quotes
 - Historical K-line data
 - Technical indicators
 - Composite score
 - Phase/context
+- Phase-aware combo signal
+- `decision` — decision-support state with evidence, hard gates, key risks, action range,
+  re-evaluation triggers and the disclaimer (read `decision.state`, not the raw `signal`)
+- `data_quality` — level, missing fields, caveats, confidence impact and the sources that
+  actually served the data
+- `currency` and `market_rules` (T+1, lot size, limit regime, execution notes)
 - Risk-reward data
 - Stop-loss and target suggestions
 - Valuation fields if available
@@ -275,7 +286,7 @@ Expected JSON includes:
 - News if available
 - `adjustment`
 - `as_of`
-- `data_sources`
+- `data_sources` (availability only — use `data_quality.sources` for what actually served)
 
 Use `as_of` as the technical analysis cutoff date.
 

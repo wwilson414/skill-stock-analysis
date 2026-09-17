@@ -196,10 +196,14 @@ Accepted inputs:
 
 | Input | Example | Resolution |
 | ----- | ------- | ---------- |
-| A-share code | `600519`, `000001`, `300750`, `688111` | Direct (SH/SZ/STAR/ChiNext/BSE) |
-| HK code | `HK00700`, `00700.HK` | Normalized to `HK00700` |
+| A-share code | `600519`, `000001`, `300750`, `688111` | Direct (SH/SZ/STAR/ChiNext/BSE); also accepts `600519.SH` / `SH600519` |
+| HK code | `HK00700`, `0700.HK`, `00700.HK` | All normalize to one internal id `00700` (`market: cn_hk`), reported in the output's `code` field |
 | US ticker | `TSLA`, `PLTR` | Direct |
 | Chinese company name | `贵州茅台`, `Kweichow Moutai` | THS search when `HITHINK_FINANCE_API_KEY` is set; otherwise the free akshare code-name table (exact match, then unique substring); last resort WebSearch |
+
+Every resolved ticker also reports its `currency` (`CNY` / `HKD` / `USD`) and a `market_rules`
+object (T+1, lot size, limit-up/down regime, execution notes) — see
+[Decision states](#decision-states).
 
 Credentials in the agent: if your client does not inherit user-level environment variables, the
 agent copies the key from the configured credential source into the client's Secret/env store, so
@@ -262,17 +266,32 @@ Analysis-mode envelope:
 | Field | Meaning |
 | ----- | ------- |
 | `analysis_date` / `analysis_time` | Run timestamp |
-| `data_sources` | Availability/key status per source (`available` / `not installed` / `configured` / `not set`) |
+| `data_sources` | Availability/key status per source (`available` / `not installed` / `configured` / `not set`) — **availability, not what actually served the data** (see `data_quality.sources`) |
 | `stocks[]` | One object per ticker (schema below) |
-| `errors[]` | `{code, error, type}` for tickers that raised |
+| `errors[]` | One object per ticker that raised (schema below) |
 | `total_requested` / `total_success` | Counts |
+| `success` / `status` | `success` is `true` only when every requested ticker succeeded; `status` is `success` / `partial` / `failure` / `no_data` (N-01) |
+
+Each `errors[]` entry (N-01):
+
+| Key | Content |
+| --- | ------- |
+| `code` | The ticker that failed |
+| `message` | Human-readable failure text |
+| `error_code` | One of `INVALID_TICKER`, `UNSUPPORTED_MARKET`, `DATA_SOURCE_UNAVAILABLE`, `DATA_NOT_FOUND`, `MISSING_REQUIRED_INPUT`, `INSUFFICIENT_HISTORY`, `RATE_LIMITED`, `CALCULATION_ERROR`, `VALIDATION_FAILED`, `TIMEOUT`, `UNKNOWN_ERROR` |
+| `retryable` | `true` for transient conditions (`RATE_LIMITED`, `TIMEOUT`, `DATA_SOURCE_UNAVAILABLE`); `false` for bad input |
+| `error` / `type` | Legacy aliases kept for backwards compatibility |
 
 Each `stocks[]` entry:
 
 | Key | Content |
 | --- | ------- |
 | `code` / `market` / `name` | Display ticker, `cn_a` / `cn_hk` / `us`, company name |
+| `currency` | `CNY` (A-share) / `HKD` (HK) / `USD` (US) (N-03) |
+| `market_rules` | Trading-rule object: `exchange`, `currency`, `t_plus_1`, `lot_size`, `has_limit_up_down`, `limit_up_pct` / `limit_down_pct`, `trading_calendar_ref`, `execution_notes` (N-03) |
 | `data_source` / `fetch_errors[]` / `adjustment` | Source that served the bars, per-source errors, price-adjustment mode |
+| `data_quality` | `level` (`high` / `medium` / `low` / `insufficient`), `score`, `missing_fields[]`, `caveats[]`, `confidence_impact` (`none` / `minor` / `moderate` / `major`), `fallback_used`, `sources` (`ohlcv` / `ohlcv_preferred` / `ohlcv_fallback` / `realtime` / `valuation` / `errors`), `as_of`, `adjustment`, `fetch_time` (N-01) |
+| `decision` | Decision-support state + evidence — see [Decision states](#decision-states) (N-02) |
 | `realtime` | Latest quote snapshot (price, change %, volume, turnover, P/E, P/B …). Missing P/E / P/B are filled by the [valuation fallback chain](#valuation-pe-pb-fallback-chain); `valuation_source` names the source that filled them |
 | `indicators` | `ma`, `macd`, `rsi`, `volume`, `bias`, `support`, `context`, `risk`, `relative_strength`, `tradability` |
 | `indicators.context` | `phase` (`uptrend_pullback` / `downtrend_decline` / `range_swing`), `range_pos_pct`, `chg_20d_pct`, `off_high_pct`, `dist_ma60_pct` |
@@ -287,12 +306,43 @@ Each `stocks[]` entry:
 | `news[]` *(with `--news`)* | `title`, `content`, `url`, `date`, `source`, `publisher`; the analyzer additionally sets `age_days`, `sentiment`, `event_type[]`, `major_risk` |
 | `news_summary` *(with `--news`)* | `sentiment_score` (14-day half-life, range [-1, 1]), `sentiment_label`, `counts`, `event_types[]`, `has_major_risk`, `dated_items`, `total_items`, `stale` |
 
-Backtest mode returns the same envelope with `mode: "backtest"` plus `forward_days` and
-`phase_analysis` (pooled IC per phase); each stock carries `{code, total_signals, lookback_bars,
-forward_days, by_signal, by_bucket, by_phase, correlations, component_correlations}`, errors
-appear as `{code, error}` (e.g. `insufficient_data`, `unknown_market`), `--calibrate` adds
-`calibration` (`weights`, `delta`, `ics`, `score_vs_20d`, `n_stocks`, `method`, `note`) and
-`--ab-test` adds `ab_test` (`weight_sets`, `per_stock`, `aggregate`).
+Backtest mode returns the same envelope (including `success` / `status`) with `mode: "backtest"`
+plus `forward_days` and `phase_analysis` (pooled IC per phase); each stock carries
+`{code, total_signals, lookback_bars, forward_days, by_signal, by_bucket, by_phase,
+correlations, component_correlations}`, errors appear as the structured objects above,
+`--calibrate` adds `calibration` (`weights`, `delta`, `ics`, `score_vs_20d`, `n_stocks`,
+`method`, `note`) and `--ab-test` adds `ab_test` (`weight_sets`, `per_stock`, `aggregate`).
+
+#### Decision states (N-02)
+
+Every `stocks[]` entry carries a `decision` object. It is **derived, never invented**: it only
+demotes a buy-grade setup, and it never fabricates a price level.
+
+| Field | Meaning |
+| ----- | ------- |
+| `state` | One of `STRONG_AVOID`, `AVOID`, `WATCHLIST`, `BUY_CANDIDATE`, `SMALL_POSITION_ONLY`, `HOLD`, `REDUCE`, `SELL_OR_EXIT`, `RECHECK_REQUIRED` |
+| `horizon` / `intent` | `5-20 trading days` / `technical` (the default when intent is unambiguous) |
+| `confidence` | `high` / `medium` / `low` / `insufficient_data` — lowered by weak data quality, mid-band scores, a missing combo, or combo/score disagreement |
+| `supporting_evidence[]` / `opposing_evidence[]` | Every claim traceable to a script field (score, combo, MA, MACD, volume, RS, gates) |
+| `hard_gates[]` | Superset of `trend_score.buy_gates` plus the N-10 rules and the combo gate state |
+| `key_risks[]` | `{category, severity, evidence, impact, monitoring_indicator}` |
+| `suggested_action_range` | Action band + `stop_suggested` / `target_suggested` / `rr_ratio` echoed from `indicators.risk` |
+| `position_size_suggestion` | `null` outside entry states; otherwise `(1/5) × combo phase weight`, capped by `score_config.RISK.max_per_stock` |
+| `re_evaluation_triggers[]` | What invalidates or refreshes the state |
+| `data_quality_warning` | Populated when `data_quality.confidence_impact` is `moderate` / `major` |
+| `assumptions[]` | Explicit horizon, no-portfolio caveat, and the technical-vs-long-term boundary |
+| `market_rules` / `disclaimer` | The market's trading rules and the fixed disclaimer |
+
+Decision-layer hard rules (N-10) — each can block `BUY_CANDIDATE` on its own:
+
+- `max(RSI6, RSI12) > 80` → overbought
+- `bias_ma5 > 5%` → overextended
+- `phase = downtrend_decline` → trend continuation (only a gate-confirmed mean-reversion
+  setup reaches `SMALL_POSITION_ONLY`)
+- `rr_ratio < 1.5`, sealed limit-up, or a `>= 5%` float unlock within 30 days
+
+These live in the decision layer only: `calc_trend_score` and the frozen backtest signal
+distribution are unchanged, so every `reports/*.json` research number still reproduces.
 
 #### Offline research, persistence & replay toolchain
 
@@ -600,6 +650,8 @@ Composite score is out of 100 points, composed of 7 dimensions (weights live in
 > Hard gates (`buy_gates`, thresholds in `score_config.GATES`) can only *demote* a buy — e.g.
 > risk-reward < 1.5, a >=5% float unlock within 30 days, a sealed limit-up you cannot buy, or a
 > relative-strength lag > 5pp. A phase of `downtrend_decline` also blocks buys outright.
+> The decision layer (`decision.hard_gates`, N-10) re-checks all of these and additionally blocks
+> `BUY_CANDIDATE` when `max(RSI6, RSI12) > 80` or `bias_ma5 > 5%`.
 
 ## Market Phase Classification
 
